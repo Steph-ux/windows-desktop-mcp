@@ -1,23 +1,41 @@
 # Windows Desktop MCP
 
-Standalone Windows desktop and browser control MCP server extracted from a larger project.
+Windows desktop and browser control MCP server for local agent workflows.
 
-It is designed for MCP-capable coding agents that need to:
-- inspect and control Windows applications
-- capture the desktop, regions, and windows
-- use UI Automation and OCR for desktop interaction
-- drive browser sessions with Playwright
-- attach to Chrome debug/CDP sessions
-- collect traces, HAR-like artifacts, coverage, and browser debug bundles
+It gives an MCP-capable model a single Windows-native surface for:
 
-## Package Layout
+- desktop capture: full desktop, region, focused window, or specific window
+- desktop interaction: click, type, hotkeys, drag, scroll, focus, move, resize
+- UI Automation and OCR: inspect controls, find visible text, click by intent
+- browser automation: Playwright sessions, profiles, presets, instances, CDP attach
+- browser diagnostics: network logs, HAR-like exports, trace, coverage, debug bundles
+- visual workflows: annotated screenshots, watchers, diffing, perception snapshots
 
-- `desktop_mcp/app.py`: shared `FastMCP` app instance
-- `desktop_mcp/server.py`: MCP stdio entrypoint
-- `desktop_mcp/tools/`: primary MCP tool surface by domain
-- `desktop_mcp/shared/`: shared helpers for Windows, screenshots, and Playwright
-- `desktop_mcp/tools_desktop.py`: legacy compatibility shim
-- `desktop_mcp/tools_browser.py`: legacy compatibility shim
+## Main Capabilities
+
+### Desktop
+
+- list and focus windows
+- inspect UI Automation trees
+- capture desktop, region, or window screenshots
+- watch for visual or semantic desktop changes
+- click by semantic intent with UIA and OCR fallback
+- use clipboard, macros, and Unicode-safe typing
+
+### Browser
+
+- open persistent Playwright sessions
+- attach to existing Chromium debug endpoints
+- manage profiles, presets, and reusable instances
+- intercept requests, inspect network traffic, and export HAR-like artifacts
+- collect trace and coverage data
+- generate browser debug snapshots, reports, and bundles
+
+### AI-Native
+
+- annotate Windows screenshots with numbered targets
+- annotate browser pages with visible interactive elements
+- return `Image(...)` artifacts directly so the host multimodal model can inspect them
 
 ## Install
 
@@ -37,7 +55,7 @@ Alternative module entrypoint:
 python -m desktop_mcp
 ```
 
-## Example MCP Configuration
+## MCP Config
 
 ```json
 {
@@ -62,9 +80,19 @@ Or:
 }
 ```
 
+## Package Layout
+
+- `desktop_mcp/app.py`: shared `FastMCP` app instance
+- `desktop_mcp/server.py`: MCP stdio entrypoint
+- `desktop_mcp/tools/`: primary MCP tool surface by domain
+- `desktop_mcp/shared/`: shared helpers for Windows, screenshots, and Playwright
+- `desktop_mcp/tools_desktop.py`: legacy compatibility shim
+- `desktop_mcp/tools_browser.py`: legacy compatibility shim
+
 ## Notes
 
-- This package targets Windows.
+- Windows only.
 - OCR features require Tesseract to be installed and available.
 - Browser features rely on Playwright and local browser availability.
-- The host model should prefer returned images directly for visual inspection; `describe_screen` is an optional fallback.
+- The preferred visual flow is to return images directly to the host model; `describe_screen` is optional fallback behavior.
+- See [`desktop_mcp/WINDOWS_DESKTOP_MCP.md`](desktop_mcp/WINDOWS_DESKTOP_MCP.md) for the internal package layout and tool families.
