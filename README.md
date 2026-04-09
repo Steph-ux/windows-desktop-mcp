@@ -80,6 +80,76 @@ Or:
 }
 ```
 
+## Host Setup
+
+### Claude Code
+
+Add the server to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "windows-desktop": {
+      "command": "windows-desktop-mcp"
+    }
+  }
+}
+```
+
+If you prefer the Python module entrypoint:
+
+```json
+{
+  "mcpServers": {
+    "windows-desktop": {
+      "command": "python",
+      "args": ["-m", "desktop_mcp"]
+    }
+  }
+}
+```
+
+### Codex
+
+Register it as an MCP server in your Codex MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "windows-desktop": {
+      "command": "windows-desktop-mcp"
+    }
+  }
+}
+```
+
+Common local alias:
+
+- server name: `windows-desktop`
+
+### OpenCode
+
+Add the same MCP server entry to your OpenCode MCP config:
+
+```json
+{
+  "mcpServers": {
+    "windows-desktop": {
+      "command": "windows-desktop-mcp"
+    }
+  }
+}
+```
+
+### Generic stdio MCP clients
+
+Use either:
+
+- executable: `windows-desktop-mcp`
+- Python module: `python -m desktop_mcp`
+
+The server communicates over stdio and does not require an HTTP wrapper.
+
 ## Package Layout
 
 - `desktop_mcp/app.py`: shared `FastMCP` app instance
