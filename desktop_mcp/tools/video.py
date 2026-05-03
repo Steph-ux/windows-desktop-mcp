@@ -201,7 +201,8 @@ def _assemble_webm(frames: list[Path], output: Path, fps: int):
         ffmpeg, "-y",
         "-framerate", str(fps),
         "-i", str(frames_dir / "frame_%06d.png"),
-        "-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0",
-        "-pix_fmt", "yuva420p",
+        "-vf", "scale='min(1280,iw)':-2",
+        "-c:v", "libvpx", "-crf", "20", "-b:v", "2M",
+        "-pix_fmt", "yuv420p",
         str(output),
-    ], capture_output=True, timeout=120)
+    ], capture_output=True, timeout=300)
