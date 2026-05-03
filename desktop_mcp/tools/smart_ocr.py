@@ -29,7 +29,7 @@ def ocr_smart(prompt: str = "", monitor: int = 0, window_title: str = "") -> dic
         if window_title:
             ocr_result = _ocr.ocr_window(title=window_title)
         else:
-            ocr_result = _ocr.ocr_region(x=0, y=0, width=1920, height=1080)
+            ocr_result = _ocr.ocr_region(left=0, top=0, width=1920, height=1080)
     except Exception as e:
         return {"error": f"OCR failed: {e}"}
 
@@ -59,7 +59,7 @@ def screen_understand(question: str = "", window_title: str = "") -> dict:
         ocr_result = _ocr.ocr_window(title=window_title)
     else:
         try:
-            ocr_result = _ocr.ocr_region(x=0, y=0, width=1920, height=1080)
+            ocr_result = _ocr.ocr_region(left=0, top=0, width=1920, height=1080)
         except Exception:
             ocr_result = {}
 
@@ -99,7 +99,7 @@ def suggest_actions(window_title: str = "") -> dict:
         if window_title:
             ocr_result = _ocr.ocr_window(title=window_title)
         else:
-            ocr_result = _ocr.ocr_region(x=0, y=0, width=1920, height=1080)
+            ocr_result = _ocr.ocr_region(left=0, top=0, width=1920, height=1080)
     except Exception:
         ocr_result = {}
 

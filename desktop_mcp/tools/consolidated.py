@@ -1,9 +1,13 @@
-"""Dynamic consolidated MCP tool registration — 14 super-tools + 3 new tools = 17 total."""
+"""Dynamic consolidated MCP tool registration — 15 super-tools via action dispatch."""
 from __future__ import annotations
+import functools
 import inspect
 import time
 import traceback
 from typing import Any
+
+import anyio
+
 from ..app import mcp
 
 from . import browser_sessions as _bs
@@ -334,17 +338,21 @@ import json as _json
 
 for _name, (_doc, _actions) in R.items():
     def _make(name=_name, doc=_doc, actions=_actions):
-        def tool_fn(action: str = "", kwargs: str = "{}", timeout_ms: int = None) -> dict[str, Any]:
+        async def tool_fn(action: str = "", kwargs: str = "{}", timeout_ms: int = None) -> dict[str, Any]:
             try:
                 kw = _json.loads(kwargs) if isinstance(kwargs, str) else kwargs
             except _json.JSONDecodeError:
                 return {"ok": False, "error": f"Invalid kwargs JSON: {kwargs!r}"}
             if not isinstance(kw, dict):
                 return {"ok": False, "error": f"kwargs must be a JSON object, got {type(kw).__name__}"}
-            return _d(actions, action, timeout_ms=timeout_ms, **kw)
+            # Offload to thread so sync Playwright calls don't conflict with asyncio loop
+            return await anyio.to_thread.run_sync(
+                functools.partial(_d, actions, action, timeout_ms=timeout_ms, **kw)
+            )
         tool_fn.__name__ = name
         tool_fn.__qualname__ = name
         tool_fn.__doc__ = doc
         return tool_fn
     mcp.tool()(_make())
+
 
