@@ -24,16 +24,21 @@ from .state import DEFAULT_PYAUTOGUI_PAUSE, PLAYWRIGHT_SESSIONS as _PLAYWRIGHT_S
 from .tools.browser_headless import *  # noqa: F401,F403
 from .tools.browser_sessions import *  # noqa: F401,F403
 from .tools.capture import *  # noqa: F401,F403
+from .tools.chrome_devtools import *  # noqa: F401,F403
+from .streaming import stop_mjpeg_server as _stop_mjpeg_server
 from .tools.input import *  # noqa: F401,F403
 from .tools.ocr import *  # noqa: F401,F403
 from .tools.runtime import *  # noqa: F401,F403
+from .tools.system import *  # noqa: F401,F403
 from .tools.windows import *  # noqa: F401,F403
 from .tools_ai import *  # noqa: F401,F403
+from .tools import consolidated as _consolidated  # noqa: F401 — side-effect registers super-tools
 from .tools.capture import stop_all_desktop_watch_sessions as _stop_all_desktop_watch_sessions
 
 ensure_runtime_dirs()
 atexit.register(_close_all_playwright_sessions)
 atexit.register(_stop_all_desktop_watch_sessions)
+atexit.register(_stop_mjpeg_server)
 
 
 def main() -> None:

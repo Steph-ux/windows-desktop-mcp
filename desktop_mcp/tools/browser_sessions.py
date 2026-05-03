@@ -648,10 +648,6 @@ def _browser_attach_cdp_impl(
             finally:
                 playwright_cm.__exit__(None, None, None)
         raise
-
-
-@mcp.tool()
-@threaded_tool
 def browser_open_session(
     url: str,
     width: int | str = 1440,
@@ -680,10 +676,6 @@ def browser_open_session(
         grant_permissions=grant_permissions,
         preset_name=preset_name,
     )
-
-
-@mcp.tool()
-@threaded_tool
 def browser_attach_cdp(
     endpoint: str,
     browser: str = "chrome",
@@ -712,20 +704,12 @@ def browser_attach_cdp(
         page_index=page_index,
         timeout_ms=timeout_ms,
     )
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_endpoints(
     ports: list[int] | None = None,
     host: str = "127.0.0.1",
 ) -> dict[str, Any]:
     endpoints = detect_cdp_endpoints(ports=ports, host=host)
     return {"count": len(endpoints), "endpoints": endpoints}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_attach_existing(
     browser: str = "chrome",
     instance_name: str | None = None,
@@ -815,17 +799,9 @@ def browser_attach_existing(
     result["preset_name"] = merged.get("preset_name")
     record_event("browser_attach_existing", endpoint=chosen["endpoint"], browser=browser, session_id=result["session_id"])
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_sessions() -> list[dict[str, Any]]:
     cleanup_stale_playwright_sessions()
     return [_session_payload(session_id, session) for session_id, session in list_playwright_sessions()]
-
-
-@mcp.tool()
-@threaded_tool
 def browser_storage_state_export(
     session_id: str,
     path: str | None = None,
@@ -837,10 +813,6 @@ def browser_storage_state_export(
     result = {"session_id": session_id, "path": str(target_path), "exists": target_path.exists()}
     record_event("browser_storage_state_export", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_grant_permissions(session_id: str, permissions: list[str]) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     resolved = [str(item) for item in permissions if str(item).strip()]
@@ -854,10 +826,6 @@ def browser_grant_permissions(session_id: str, permissions: list[str]) -> dict[s
     result = {"session_id": session_id, "granted_permissions": merged}
     record_event("browser_grant_permissions", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_clear_permissions(session_id: str) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     try:
@@ -868,10 +836,6 @@ def browser_clear_permissions(session_id: str) -> dict[str, Any]:
     result = {"session_id": session_id, "granted_permissions": []}
     record_event("browser_clear_permissions", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_revoke_permissions(session_id: str, permissions: list[str]) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     current = list(session.get("granted_permissions", []))
@@ -931,10 +895,6 @@ def _browser_launch_debug_browser_impl(
         )
     record_event("browser_launch_debug_browser", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_launch_debug_browser(
     browser: str = "chrome",
     port: int = 9222,
@@ -943,10 +903,6 @@ def browser_launch_debug_browser(
     startup_wait_ms: int = 5000,
 ) -> dict[str, Any]:
     return _browser_launch_debug_browser_impl(browser=browser, port=port, url=url, profile_name=profile_name, startup_wait_ms=startup_wait_ms)
-
-
-@mcp.tool()
-@threaded_tool
 def browser_launch_and_attach(
     browser: str = "chrome",
     port: int = 9222,
@@ -979,10 +935,6 @@ def browser_launch_and_attach(
         height=height,
     )
     return {**attached, "browser_pid": launched["pid"], "launched_debug_browser": True}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_profiles(browser: str = "auto") -> dict[str, Any]:
     named_root = BROWSER_PROFILE_ROOT / "named"
     profiles: list[dict[str, Any]] = []
@@ -992,10 +944,6 @@ def browser_list_profiles(browser: str = "auto") -> dict[str, Any]:
                 continue
             profiles.append(_profile_payload(path.name, path, browser=browser))
     return {"count": len(profiles), "profiles": profiles}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_profile(profile_name: str) -> dict[str, Any]:
     safe_name = _safe_profile_name(profile_name)
     path = _named_profile_path(safe_name)
@@ -1004,10 +952,6 @@ def browser_get_profile(profile_name: str) -> dict[str, Any]:
     result = _profile_payload(safe_name, path)
     record_event("browser_get_profile", name=safe_name)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_create_profile(
     profile_name: str,
     description: str | None = None,
@@ -1030,10 +974,6 @@ def browser_create_profile(
     result = {"created": True, **_profile_payload(safe_name, path, browser=browser), "metadata": manifest}
     record_event("browser_create_profile", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_update_profile(
     profile_name: str,
     description: str | None = None,
@@ -1058,10 +998,6 @@ def browser_update_profile(
     result = {**_profile_payload(safe_name, path, browser=updated.get("browser", "auto")), "updated": True}
     record_event("browser_update_profile", name=safe_name)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_save_preset(
     preset_name: str,
     browser: str | None = None,
@@ -1093,26 +1029,14 @@ def browser_save_preset(
     result = {"saved": True, "preset": data, "path": str(_preset_path(preset_name))}
     record_event("browser_save_preset", preset_name=data["preset_name"])
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_preset(preset_name: str) -> dict[str, Any]:
     preset = _read_preset(preset_name)
     if not preset:
         raise ValueError(f"Unknown browser preset: {_safe_preset_name(preset_name)}")
     return {"preset": preset, "path": str(_preset_path(preset_name))}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_presets() -> dict[str, Any]:
     presets = _list_presets()
     return {"count": len(presets), "presets": presets}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_delete_preset(preset_name: str) -> dict[str, Any]:
     path = _preset_path(preset_name)
     existed = path.exists()
@@ -1121,10 +1045,6 @@ def browser_delete_preset(preset_name: str) -> dict[str, Any]:
     result = {"preset_name": _safe_preset_name(preset_name), "deleted": existed and (not path.exists()), "path": str(path)}
     record_event("browser_delete_preset", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_export_profile_config(profile_name: str, path: str | None = None) -> dict[str, Any]:
     safe_name = _safe_profile_name(profile_name)
     profile_path = _named_profile_path(safe_name)
@@ -1148,10 +1068,6 @@ def browser_export_profile_config(profile_name: str, path: str | None = None) ->
     result = {"profile_name": safe_name, "path": str(target_path), "exists": target_path.exists()}
     record_event("browser_export_profile_config", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_import_profile_config(path: str, profile_name_override: str | None = None) -> dict[str, Any]:
     source_path = Path(path)
     data = json.loads(source_path.read_text(encoding="utf-8"))
@@ -1174,10 +1090,6 @@ def browser_import_profile_config(path: str, profile_name_override: str | None =
     result = {"profile_name": profile_name, "path": str(profile_path), "imported": True, "metadata": manifest}
     record_event("browser_import_profile_config", profile_name=profile_name, source_path=str(source_path))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_delete_profile(profile_name: str, force: bool = False) -> dict[str, Any]:
     import shutil
 
@@ -1239,10 +1151,6 @@ def _browser_start_instance_impl(
     result["reused"] = False
     record_event("browser_start_instance", instance_name=safe_name, reused=False, session_id=result["session_id"])
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_start_instance(
     instance_name: str,
     url: str = "about:blank",
@@ -1269,10 +1177,6 @@ def browser_start_instance(
         grant_permissions=grant_permissions,
         preset_name=preset_name,
     )
-
-
-@mcp.tool()
-@threaded_tool
 def browser_resume_instance(instance_name: str, url: str | None = None) -> dict[str, Any]:
     safe_name = _safe_instance_name(instance_name)
     manifest = _read_instance_manifest(safe_name)
@@ -1298,10 +1202,6 @@ def browser_resume_instance(instance_name: str, url: str | None = None) -> dict[
         grant_permissions=manifest.get("granted_permissions"),
         preset_name=manifest.get("preset_name"),
     )
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_instance(instance_name: str) -> dict[str, Any]:
     safe_name = _safe_instance_name(instance_name)
     running = _running_instance_session(safe_name)
@@ -1312,10 +1212,6 @@ def browser_get_instance(instance_name: str) -> dict[str, Any]:
     if manifest:
         return {"running": False, "instance_name": safe_name, "manifest": manifest}
     raise ValueError(f"Unknown browser instance: {safe_name}")
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_instances() -> dict[str, Any]:
     manifests = {item["instance_name"]: item for item in _list_instance_manifests()}
     instances: list[dict[str, Any]] = []
@@ -1371,16 +1267,8 @@ def _browser_stop_instance_impl(instance_name: str) -> dict[str, Any]:
     result = {"instance_name": safe_name, "closed": closed, "session_id": session_id, "browser_pid": browser_pid}
     record_event("browser_stop_instance", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_stop_instance(instance_name: str) -> dict[str, Any]:
     return _browser_stop_instance_impl(instance_name)
-
-
-@mcp.tool()
-@threaded_tool
 def browser_stop_instance_and_browser(instance_name: str) -> dict[str, Any]:
     safe_name = _safe_instance_name(instance_name)
     manifest = _read_instance_manifest(safe_name) or {"instance_name": safe_name}
@@ -1406,10 +1294,6 @@ def browser_stop_instance_and_browser(instance_name: str) -> dict[str, Any]:
     payload = {**result, "browser_closed": browser_closed}
     record_event("browser_stop_instance_and_browser", instance_name=safe_name, browser_closed=browser_closed, browser_pid=browser_pid)
     return payload
-
-
-@mcp.tool()
-@threaded_tool
 def browser_delete_instance(instance_name: str, force: bool = False) -> dict[str, Any]:
     safe_name = _safe_instance_name(instance_name)
     running = _running_instance_session(safe_name)
@@ -1426,34 +1310,18 @@ def browser_delete_instance(instance_name: str, force: bool = False) -> dict[str
     result = {"instance_name": safe_name, "deleted": existed and (not path.exists()), "manifest_path": str(path)}
     record_event("browser_delete_instance", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_cleanup_sessions(max_age_minutes: float = SESSION_MAX_AGE_MINUTES) -> dict[str, Any]:
     result = cleanup_stale_playwright_sessions(max_age_minutes=max_age_minutes)
     record_event("browser_cleanup_sessions", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_cleanup_profiles(max_age_hours: float = 12) -> dict[str, Any]:
     result = cleanup_stale_browser_profiles(max_age_hours=max_age_hours)
     record_event("browser_cleanup_profiles", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_pages(session_id: str) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     refresh_playwright_pages(session)
     return {"session_id": session_id, "active_page_id": session.get("active_page_id"), "pages": [playwright_page_info(page_id, page) for page_id, page in session["pages"].items()]}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_new_page(session_id: str, url: str = "about:blank", wait_until: str = "load", make_active: bool = True) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     page = session["context"].new_page()
@@ -1462,10 +1330,6 @@ def browser_new_page(session_id: str, url: str = "about:blank", wait_until: str 
     result = {"session_id": session_id, "page_id": page_id, "active_page_id": session.get("active_page_id"), "url": page.url, "title": page_title(page)}
     record_event("browser_new_page", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_switch_page(session_id: str, page_id: str) -> dict[str, Any]:
     session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.bring_to_front()
@@ -1473,10 +1337,6 @@ def browser_switch_page(session_id: str, page_id: str) -> dict[str, Any]:
     result = {"session_id": session_id, "page_id": resolved_page_id, "url": page.url, "title": page_title(page)}
     record_event("browser_switch_page", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_close_page(session_id: str, page_id: str) -> dict[str, Any]:
     session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.close()
@@ -1484,10 +1344,6 @@ def browser_close_page(session_id: str, page_id: str) -> dict[str, Any]:
     result = {"session_id": session_id, "closed_page_id": resolved_page_id, "active_page_id": session.get("active_page_id"), "remaining_pages": len(session["pages"])}
     record_event("browser_close_page", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_close_session(session_id: str) -> dict[str, Any]:
     instance_name = None
     try:
@@ -1509,20 +1365,12 @@ def browser_close_session(session_id: str) -> dict[str, Any]:
         result["instance_name"] = instance_name
     record_event("browser_close_session", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_navigate(session_id: str, url: str, wait_until: str = "networkidle", page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.goto(url, wait_until=wait_until)
     result = {"session_id": session_id, "page_id": resolved_page_id, "url": page.url, "title": page_title(page)}
     record_event("browser_navigate", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_capture_session(session_id: str, path: str | None = None, full_page: bool = False, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     target_path = Path(path) if path else BROWSER_CAPTURE_ROOT / f"session-{session_id}-{resolved_page_id}-{now_stamp()}.png"
@@ -1531,18 +1379,10 @@ def browser_capture_session(session_id: str, path: str | None = None, full_page:
     result = {"session_id": session_id, "page_id": resolved_page_id, "path": str(target_path), "url": page.url, "title": page_title(page), "full_page": full_page}
     record_event("browser_capture_session", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_dom(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     html = page.content()
     return {"session_id": session_id, "page_id": resolved_page_id, "url": page.url, "title": page_title(page), "html": html, "length": len(html)}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_viewport_state(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     state = page.evaluate(
@@ -1562,57 +1402,33 @@ def browser_get_viewport_state(session_id: str, page_id: str | None = None) -> d
         })"""
     )
     return {"session_id": session_id, "page_id": resolved_page_id, **state}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_reload(session_id: str, wait_until: str = "networkidle", page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.reload(wait_until=wait_until)
     result = {"session_id": session_id, "page_id": resolved_page_id, "url": page.url, "title": page_title(page)}
     record_event("browser_reload", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_go_back(session_id: str, wait_until: str = "networkidle", page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     response = page.go_back(wait_until=wait_until)
     result = {"session_id": session_id, "page_id": resolved_page_id, "url": page.url, "title": page_title(page), "navigated": response is not None}
     record_event("browser_go_back", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_go_forward(session_id: str, wait_until: str = "networkidle", page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     response = page.go_forward(wait_until=wait_until)
     result = {"session_id": session_id, "page_id": resolved_page_id, "url": page.url, "title": page_title(page), "navigated": response is not None}
     record_event("browser_go_forward", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_url(session_id: str, pattern: str, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     matched_url = wait_for_url_pattern(page, pattern, timeout_ms=timeout_ms)
     result = {"session_id": session_id, "page_id": resolved_page_id, "matched": True, "url": matched_url}
     record_event("browser_wait_for_url", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_count_selectors(session_id: str, selector: str, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     return {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "count": page.locator(selector).count()}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_text(session_id: str, selector: str, timeout_ms: int = 10000, all_matches: bool = False, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.locator(selector)
@@ -1621,10 +1437,6 @@ def browser_get_text(session_id: str, selector: str, timeout_ms: int = 10000, al
         texts = [text.strip() for text in locator.all_inner_texts()]
         return {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "count": len(texts), "texts": texts}
     return {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "text": locator.first.inner_text(timeout=max(timeout_ms, 1)).strip()}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_form_fields(session_id: str, page_id: str | None = None, limit: int = 50) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     fields = page.evaluate(
@@ -1658,10 +1470,6 @@ def browser_list_form_fields(session_id: str, page_id: str | None = None, limit:
     )
     bounded = max(1, min(int(limit), 200))
     return {"session_id": session_id, "page_id": resolved_page_id, "count": min(len(fields), bounded), "fields": fields[:bounded]}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_fill_form_field(session_id: str, index: int, value: str, clear_first: bool = True, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     js_index = int(index)
@@ -1702,10 +1510,6 @@ def browser_fill_form_field(session_id: str, index: int, value: str, clear_first
             locator.fill("", timeout=max(timeout_ms, 1))
         locator.fill(value, timeout=max(timeout_ms, 1))
     return {"session_id": session_id, "page_id": resolved_page_id, "index": js_index, "value_length": len(value), "clear_first": clear_first, **details}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_toggle_form_field(session_id: str, index: int, checked: bool = True, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     js_index = int(index)
@@ -1734,19 +1538,11 @@ def browser_toggle_form_field(session_id: str, index: int, checked: bool = True,
     else:
         locator.uncheck(timeout=max(timeout_ms, 1))
     return {"session_id": session_id, "page_id": resolved_page_id, "index": js_index, "checked": checked, **details}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_selector(session_id: str, selector: str, timeout_ms: int = 10000, state: str = "visible", page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.wait_for_selector(selector, timeout=max(timeout_ms, 1), state=state)
     box = locator.bounding_box() if locator else None
     return {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "found": locator is not None, "box": box}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_text(session_id: str, text: str, timeout_ms: int = 10000, exact: bool = False, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.get_by_text(text, exact=exact).first
@@ -1754,10 +1550,6 @@ def browser_wait_for_text(session_id: str, text: str, timeout_ms: int = 10000, e
     result = {"session_id": session_id, "page_id": resolved_page_id, "text": text, "exact": exact, "found": True}
     record_event("browser_wait_for_text", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_dom_change(session_id: str, timeout_ms: int = 10000, poll_ms: int = 250, baseline_hash: str | None = None, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     before_hash = baseline_hash or hashlib.sha256(page.content().encode("utf-8", errors="replace")).hexdigest()
@@ -1772,10 +1564,6 @@ def browser_wait_for_dom_change(session_id: str, timeout_ms: int = 10000, poll_m
         result = {"session_id": session_id, "page_id": resolved_page_id, "changed": False, "before_hash": before_hash, "after_hash": before_hash}
         record_event("browser_wait_for_dom_change", **result)
         return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_click_text(session_id: str, text: str, timeout_ms: int = 10000, exact: bool = False, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.get_by_text(text, exact=exact).first
@@ -1799,10 +1587,6 @@ def _save_download_artifact(download: Any, session_id: str) -> dict[str, Any]:
     except Exception as exc:
         entry["error"] = str(exc)
     return entry
-
-
-@mcp.tool()
-@threaded_tool
 def browser_click_text_and_wait_download(session_id: str, text: str, timeout_ms: int = 10000, exact: bool = False, page_id: str | None = None) -> dict[str, Any]:
     session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.get_by_text(text, exact=exact).first
@@ -1814,10 +1598,6 @@ def browser_click_text_and_wait_download(session_id: str, text: str, timeout_ms:
     result = {"session_id": session_id, "page_id": resolved_page_id, "text": text, "exact": exact, "clicked": True, "download": entry}
     record_event("browser_click_text_and_wait_download", session_id=session_id, page_id=resolved_page_id, text=text, exact=exact, download_path=entry.get("path"), saved=entry.get("saved"))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_click_interactive(session_id: str, index: int, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     js_index = int(index)
@@ -1850,20 +1630,12 @@ def browser_click_interactive(session_id: str, index: int, timeout_ms: int = 100
     result = {"session_id": session_id, "page_id": resolved_page_id, "index": js_index, "clicked": True, **details}
     record_event("browser_click_interactive", session_id=session_id, page_id=resolved_page_id, index=js_index, tag=details.get("tag"), role=details.get("role"))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_click_selector(session_id: str, selector: str, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.locator(selector).first.click(timeout=max(timeout_ms, 1))
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "clicked": True}
     record_event("browser_click_selector", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_click_selector_and_wait_download(session_id: str, selector: str, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     with page.expect_download(timeout=max(timeout_ms, 1)) as download_info:
@@ -1874,10 +1646,6 @@ def browser_click_selector_and_wait_download(session_id: str, selector: str, tim
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "clicked": True, "download": entry}
     record_event("browser_click_selector_and_wait_download", session_id=session_id, page_id=resolved_page_id, selector=selector, download_path=entry.get("path"), saved=entry.get("saved"))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_type_selector(session_id: str, selector: str, text: str, clear_first: bool = True, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.locator(selector).first
@@ -1887,10 +1655,6 @@ def browser_type_selector(session_id: str, selector: str, text: str, clear_first
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "length": len(text)}
     record_event("browser_type_selector", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_focus_selector(session_id: str, selector: str, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.locator(selector).first
@@ -1898,10 +1662,6 @@ def browser_focus_selector(session_id: str, selector: str, timeout_ms: int = 100
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "focused": True}
     record_event("browser_focus_selector", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_set_input_files(session_id: str, selector: str, paths: list[str], timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.locator(selector).first
@@ -1909,20 +1669,12 @@ def browser_set_input_files(session_id: str, selector: str, paths: list[str], ti
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "file_count": len(paths), "paths": paths}
     record_event("browser_set_input_files", session_id=session_id, page_id=resolved_page_id, selector=selector, file_count=len(paths))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_press_key(session_id: str, key: str, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.keyboard.press(key)
     result = {"session_id": session_id, "page_id": resolved_page_id, "key": key}
     record_event("browser_press_key", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_scroll_page(session_id: str, delta_y: int = 800, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     before = page.evaluate("() => window.scrollY")
@@ -1930,10 +1682,6 @@ def browser_scroll_page(session_id: str, delta_y: int = 800, page_id: str | None
     result = {"session_id": session_id, "page_id": resolved_page_id, "before": before, "after": after, "delta_y": delta_y}
     record_event("browser_scroll_page", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_eval(session_id: str, expression: str, page_id: str | None = None) -> dict[str, Any]:
     validate_js_expression(expression)
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
@@ -1941,10 +1689,6 @@ def browser_eval(session_id: str, expression: str, page_id: str | None = None) -
     payload = {"session_id": session_id, "page_id": resolved_page_id, "result": result}
     record_event("browser_eval", session_id=session_id, page_id=resolved_page_id)
     return payload
-
-
-@mcp.tool()
-@threaded_tool
 def browser_fill_form(session_id: str, fields: list[dict[str, Any]], submit_selector: str | None = None, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     filled: list[dict[str, Any]] = []
@@ -1969,20 +1713,12 @@ def browser_fill_form(session_id: str, fields: list[dict[str, Any]], submit_sele
     result = {"session_id": session_id, "page_id": resolved_page_id, "filled": filled, "submitted": submit_selector is not None}
     record_event("browser_fill_form", session_id=session_id, page_id=resolved_page_id, field_count=len(filled), submitted=submit_selector is not None)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_load_state(session_id: str, state: str = "networkidle", timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.wait_for_load_state(state=state, timeout=max(timeout_ms, 1))
     result = {"session_id": session_id, "page_id": resolved_page_id, "state": state, "ready": True, "url": page.url}
     record_event("browser_wait_for_load_state", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_visual_change(session_id: str, selector: str = "body", timeout_ms: int = 10000, poll_ms: int = 250, baseline_hash: str | None = None, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     locator = page.locator(selector).first
@@ -2024,29 +1760,17 @@ def browser_wait_for_visual_change(session_id: str, selector: str = "body", time
         result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "changed": False, "before_hash": before_hash, "after_hash": before_hash}
         record_event("browser_wait_for_visual_change", **result)
         return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_console_logs(session_id: str, page_id: str | None = None, limit: int = 50) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
     entries = buffers["console"][-max(1, min(int(limit), 100)) :]
     return {"session_id": session_id, "page_id": resolved_page_id, "count": len(entries), "entries": entries}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_network_errors(session_id: str, page_id: str | None = None, limit: int = 50) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
     request_failures = buffers["request_failures"][-max(1, min(int(limit), 100)) :]
     page_errors = buffers["page_errors"][-max(1, min(int(limit), 100)) :]
     return {"session_id": session_id, "page_id": resolved_page_id, "request_failure_count": len(request_failures), "page_error_count": len(page_errors), "request_failures": request_failures, "page_errors": page_errors}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_network_requests(
     session_id: str,
     page_id: str | None = None,
@@ -2169,10 +1893,6 @@ def browser_list_network_requests(
         },
         "entries": paged_entries,
     }
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_network_request(session_id: str, request_id: str, page_id: str | None = None) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
@@ -2188,10 +1908,6 @@ def browser_get_network_request(session_id: str, request_id: str, page_id: str |
         "response": response,
         "failure": failure,
     }
-
-
-@mcp.tool()
-@threaded_tool
 def browser_export_network_har(
     session_id: str,
     page_id: str | None = None,
@@ -2267,28 +1983,16 @@ def browser_export_network_har(
     }
     record_event("browser_export_network_har", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_dialogs(session_id: str, page_id: str | None = None, limit: int = 25) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
     dialogs = buffers["dialogs"][-max(1, min(int(limit), 50)) :]
     return {"session_id": session_id, "page_id": resolved_page_id, "count": len(dialogs), "dialogs": dialogs}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_downloads(session_id: str, page_id: str | None = None, limit: int = 25) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
     downloads = buffers["downloads"][-max(1, min(int(limit), 50)) :]
     return {"session_id": session_id, "page_id": resolved_page_id, "count": len(downloads), "downloads": downloads}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_wait_for_download(session_id: str, page_id: str | None = None, timeout_ms: int = 10000, minimum_count: int = 1) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     deadline = time.time() + (max(timeout_ms, 1) / 1000)
@@ -2301,10 +2005,6 @@ def browser_wait_for_download(session_id: str, page_id: str | None = None, timeo
         time.sleep(0.1)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
     return {"session_id": session_id, "page_id": resolved_page_id, "count": len(buffers["downloads"]), "downloads": buffers["downloads"], "timed_out": True}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_page_summary(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     summary = page.evaluate(
@@ -2328,10 +2028,6 @@ def browser_get_page_summary(session_id: str, page_id: str | None = None) -> dic
         }"""
     )
     return {"session_id": session_id, "page_id": resolved_page_id, **summary}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_performance_metrics(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     metrics = page.evaluate(
@@ -2404,10 +2100,6 @@ def browser_get_performance_metrics(session_id: str, page_id: str | None = None)
         }"""
     )
     return {"session_id": session_id, "page_id": resolved_page_id, **metrics}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_network_summary(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     buffers = get_playwright_page_event_buffers(session, resolved_page_id)
@@ -2451,10 +2143,6 @@ def browser_get_network_summary(session_id: str, page_id: str | None = None) -> 
         "total_transfer_size": total_transfer_size,
         "slowest_requests": slowest,
     }
-
-
-@mcp.tool()
-@threaded_tool
 def browser_start_trace(
     session_id: str,
     screenshots: bool = True,
@@ -2482,10 +2170,6 @@ def browser_start_trace(
     result = {"session_id": session_id, **trace_state}
     record_event("browser_start_trace", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_stop_trace(session_id: str, path: str | None = None) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     trace_state = session.setdefault("trace_state", {})
@@ -2502,10 +2186,6 @@ def browser_stop_trace(session_id: str, path: str | None = None) -> dict[str, An
     }
     record_event("browser_stop_trace", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_start_coverage(
     session_id: str,
     page_id: str | None = None,
@@ -2542,10 +2222,6 @@ def browser_start_coverage(
     }
     record_event("browser_start_coverage", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_stop_coverage(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     session, resolved_page_id, _ = get_playwright_page(session_id, page_id=page_id)
     coverage_state = session.setdefault("coverage_state", {})
@@ -2620,10 +2296,6 @@ def browser_stop_coverage(session_id: str, page_id: str | None = None) -> dict[s
     }
     record_event("browser_stop_coverage", session_id=session_id, page_id=resolved_page_id, js_script_count=js_summary["script_count"], css_rule_count=css_summary["rule_count"])
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_export_coverage_json(
     session_id: str,
     page_id: str | None = None,
@@ -2635,10 +2307,6 @@ def browser_export_coverage_json(
 def _call_sync_tool(fn: Any, *args: Any, **kwargs: Any) -> Any:
     target = getattr(fn, "__wrapped__", fn)
     return target(*args, **kwargs)
-
-
-@mcp.tool()
-@threaded_tool
 def browser_intercept_requests(
     session_id: str,
     pattern: str = "**/*",
@@ -2684,20 +2352,12 @@ def browser_intercept_requests(
     }
     record_event("browser_intercept_requests", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_intercepts(session_id: str) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     rules = []
     for rule in session.get("intercept_rules", []):
         rules.append({key: value for key, value in rule.items() if key not in {"body"}} | {"body_length": len(rule["body"]) if rule.get("body") else 0})
     return {"session_id": session_id, "count": len(rules), "rules": rules}
-
-
-@mcp.tool()
-@threaded_tool
 def browser_clear_intercepts(session_id: str) -> dict[str, Any]:
     session = get_playwright_session(session_id)
     cleared = len(session.get("intercept_rules", []))
@@ -2706,10 +2366,6 @@ def browser_clear_intercepts(session_id: str) -> dict[str, Any]:
     result = {"session_id": session_id, "cleared": cleared, "applied": applied["applied"]}
     record_event("browser_clear_intercepts", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_capture_element(session_id: str, selector: str, path: str | None = None, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     target_path = Path(path) if path else BROWSER_CAPTURE_ROOT / f"element-{session_id}-{resolved_page_id}-{now_stamp()}.png"
@@ -2720,10 +2376,6 @@ def browser_capture_element(session_id: str, selector: str, path: str | None = N
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "path": str(target_path), "url": page.url}
     record_event("browser_capture_element", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_snapshot_state(session_id: str, page_id: str | None = None, selector: str = "body", path: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     html = page.content()
@@ -2756,10 +2408,6 @@ def browser_snapshot_state(session_id: str, page_id: str | None = None, selector
         "image_hash": image_hash,
         **viewport_state,
     }
-
-
-@mcp.tool()
-@threaded_tool
 def browser_list_interactive_elements(session_id: str, page_id: str | None = None, limit: int = 50) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     elements = page.evaluate(
@@ -2829,20 +2477,12 @@ def browser_list_interactive_elements(session_id: str, page_id: str | None = Non
         "count": min(len(elements), bounded),
         "elements": elements[:bounded],
     }
-
-
-@mcp.tool()
-@threaded_tool
 def browser_hover_selector(session_id: str, selector: str, timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.locator(selector).first.hover(timeout=max(timeout_ms, 1))
     result = {"session_id": session_id, "page_id": resolved_page_id, "selector": selector, "hovered": True}
     record_event("browser_hover_selector", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_capture_live_page(
     url: str,
     width: int = 1440,
@@ -2868,10 +2508,6 @@ def browser_capture_live_page(
         except Exception:
             pass
     return image
-
-
-@mcp.tool()
-@threaded_tool
 def browser_save_live_page_screenshot(
     url: str,
     width: int = 1440,
@@ -2919,10 +2555,6 @@ def _browser_export_coverage_json_impl(
     }
     record_event("browser_export_coverage_json", **result)
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_debug_snapshot(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     return _browser_debug_snapshot_impl(session_id=session_id, page_id=page_id)
 
@@ -2951,10 +2583,6 @@ def _browser_debug_snapshot_impl(session_id: str, page_id: str | None = None) ->
         "coverage_active": bool(coverage_state),
         "trace_active": bool(trace_state.get("active")),
     }
-
-
-@mcp.tool()
-@threaded_tool
 def browser_debug_report(session_id: str, page_id: str | None = None) -> dict[str, Any]:
     return _browser_debug_report_impl(session_id=session_id, page_id=page_id)
 
@@ -3000,10 +2628,6 @@ def _browser_debug_report_impl(session_id: str, page_id: str | None = None) -> d
     }
     record_event("browser_debug_report", session_id=session_id, page_id=snapshot["page_id"], issue_count=len(issues))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_debug_bundle(
     session_id: str,
     page_id: str | None = None,
@@ -3047,10 +2671,6 @@ def browser_debug_bundle(
     }
     record_event("browser_debug_bundle", session_id=session_id, page_id=resolved_page_id, artifact_count=len(artifacts))
     return result
-
-
-@mcp.tool()
-@threaded_tool
 def browser_get_accessibility_snapshot(session_id: str, page_id: str | None = None, interesting_only: bool = True) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     snapshot = page.evaluate(
@@ -3086,6 +2706,248 @@ def browser_get_accessibility_snapshot(session_id: str, page_id: str | None = No
         interesting_only,
     )
     return {"session_id": session_id, "page_id": resolved_page_id, "interesting_only": interesting_only, "snapshot": snapshot}
+
+
+# ---------------------------------------------------------------------------
+# Cookie management
+# ---------------------------------------------------------------------------
+def browser_get_cookies(
+    session_id: str,
+    urls: list[str] | None = None,
+) -> dict[str, Any]:
+    """Get cookies from the browser context. Optionally filter by URL(s)."""
+    session = get_playwright_session(session_id)
+    ctx = session["context"]
+    cookies = ctx.cookies(urls) if urls else ctx.cookies()
+    serialized = [
+        {
+            "name": c.get("name"),
+            "value": c.get("value"),
+            "domain": c.get("domain"),
+            "path": c.get("path"),
+            "expires": c.get("expires"),
+            "httpOnly": c.get("httpOnly"),
+            "secure": c.get("secure"),
+            "sameSite": c.get("sameSite"),
+        }
+        for c in cookies
+    ]
+    result = {"session_id": session_id, "count": len(serialized), "cookies": serialized}
+    record_event("browser_get_cookies", session_id=session_id, count=len(serialized))
+    return result
+def browser_set_cookies(
+    session_id: str,
+    cookies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Add cookies to the browser context.
+
+    Each cookie dict must have 'name' and 'value'.
+    Optional keys: 'url', 'domain', 'path', 'expires', 'httpOnly', 'secure', 'sameSite'.
+    Either 'url' or 'domain'+'path' must be provided.
+    """
+    session = get_playwright_session(session_id)
+    ctx = session["context"]
+    for c in cookies:
+        if "name" not in c or "value" not in c:
+            raise ValueError("Each cookie must have 'name' and 'value'.")
+        if "url" not in c and "domain" not in c:
+            raise ValueError("Each cookie must have either 'url' or 'domain'.")
+    ctx.add_cookies(cookies)
+    result = {"session_id": session_id, "added": len(cookies)}
+    record_event("browser_set_cookies", session_id=session_id, count=len(cookies))
+    return result
+def browser_delete_cookies(
+    session_id: str,
+) -> dict[str, Any]:
+    """Clear all cookies from the browser context."""
+    session = get_playwright_session(session_id)
+    ctx = session["context"]
+    ctx.clear_cookies()
+    result = {"session_id": session_id, "cleared": True}
+    record_event("browser_delete_cookies", session_id=session_id)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Iframe / frame navigation
+# ---------------------------------------------------------------------------
+def browser_list_frames(
+    session_id: str,
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """List all frames (including iframes) in the current page."""
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    frames_info = []
+    for f in page.frames:
+        frames_info.append({
+            "name": f.name or "",
+            "url": f.url,
+            "is_main": f == page.main_frame,
+            "is_detached": f.is_detached(),
+        })
+    result = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "count": len(frames_info),
+        "frames": frames_info,
+    }
+    record_event("browser_list_frames", session_id=session_id, page_id=resolved_page_id, count=len(frames_info))
+    return result
+def browser_frame_eval(
+    session_id: str,
+    expression: str,
+    frame_name: str | None = None,
+    frame_url: str | None = None,
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Execute JavaScript in a specific frame/iframe.
+
+    Identify the frame by name or URL substring.
+    Use browser_list_frames to discover available frames first.
+    """
+    validate_js_expression(expression)
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    target_frame = None
+    if frame_name:
+        target_frame = page.frame(name=frame_name)
+    elif frame_url:
+        target_frame = page.frame(url=re.compile(re.escape(frame_url)))
+    if target_frame is None:
+        raise ValueError(
+            f"Frame not found (name={frame_name!r}, url={frame_url!r}). "
+            "Use browser_list_frames to see available frames."
+        )
+    result_value = target_frame.evaluate(expression)
+    result = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "frame_name": target_frame.name,
+        "frame_url": target_frame.url,
+        "result": result_value,
+    }
+    record_event("browser_frame_eval", session_id=session_id, page_id=resolved_page_id, frame=target_frame.name)
+    return result
+def browser_frame_click(
+    session_id: str,
+    selector: str,
+    frame_name: str | None = None,
+    frame_url: str | None = None,
+    page_id: str | None = None,
+    timeout: int = 5000,
+) -> dict[str, Any]:
+    """Click an element inside a specific frame/iframe.
+
+    Identify the frame by name or URL substring.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    target_frame = None
+    if frame_name:
+        target_frame = page.frame(name=frame_name)
+    elif frame_url:
+        target_frame = page.frame(url=re.compile(re.escape(frame_url)))
+    if target_frame is None:
+        raise ValueError(
+            f"Frame not found (name={frame_name!r}, url={frame_url!r}). "
+            "Use browser_list_frames to see available frames."
+        )
+    target_frame.locator(selector).first.click(timeout=timeout)
+    result = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "frame_name": target_frame.name,
+        "selector": selector,
+        "clicked": True,
+    }
+    record_event("browser_frame_click", session_id=session_id, page_id=resolved_page_id, frame=target_frame.name, selector=selector)
+    return result
+def browser_frame_fill(
+    session_id: str,
+    selector: str,
+    value: str,
+    frame_name: str | None = None,
+    frame_url: str | None = None,
+    page_id: str | None = None,
+    timeout: int = 5000,
+) -> dict[str, Any]:
+    """Fill a text input inside a specific frame/iframe.
+
+    Identify the frame by name or URL substring.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    target_frame = None
+    if frame_name:
+        target_frame = page.frame(name=frame_name)
+    elif frame_url:
+        target_frame = page.frame(url=re.compile(re.escape(frame_url)))
+    if target_frame is None:
+        raise ValueError(
+            f"Frame not found (name={frame_name!r}, url={frame_url!r}). "
+            "Use browser_list_frames to see available frames."
+        )
+    target_frame.locator(selector).first.fill(value, timeout=timeout)
+    result = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "frame_name": target_frame.name,
+        "selector": selector,
+        "filled": True,
+    }
+    record_event("browser_frame_fill", session_id=session_id, page_id=resolved_page_id, frame=target_frame.name, selector=selector)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Shadow DOM
+# ---------------------------------------------------------------------------
+def browser_shadow_query(
+    session_id: str,
+    host_selector: str,
+    inner_selector: str,
+    action: str = "text",
+    fill_value: str = "",
+    page_id: str | None = None,
+    timeout: int = 5000,
+) -> dict[str, Any]:
+    """Interact with elements inside Shadow DOM.
+
+    Args:
+        host_selector: CSS selector for the shadow host element.
+        inner_selector: CSS selector for the target element inside the shadow root.
+        action: One of 'text', 'click', 'fill', 'html', 'visible', 'count'.
+        fill_value: Value to fill (only used when action='fill').
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    # Playwright's >> syntax pierces shadow DOM
+    combined = f"{host_selector} >> {inner_selector}"
+    locator = page.locator(combined)
+    action = action.lower().strip()
+    if action == "text":
+        result_value = locator.first.text_content(timeout=timeout)
+    elif action == "click":
+        locator.first.click(timeout=timeout)
+        result_value = True
+    elif action == "fill":
+        locator.first.fill(fill_value, timeout=timeout)
+        result_value = True
+    elif action == "html":
+        result_value = locator.first.inner_html(timeout=timeout)
+    elif action == "visible":
+        result_value = locator.first.is_visible(timeout=timeout)
+    elif action == "count":
+        result_value = locator.count()
+    else:
+        raise ValueError(f"Unknown action: {action!r}. Use text, click, fill, html, visible, or count.")
+
+    result = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "host_selector": host_selector,
+        "inner_selector": inner_selector,
+        "action": action,
+        "result": result_value,
+    }
+    record_event("browser_shadow_query", session_id=session_id, page_id=resolved_page_id, action=action)
+    return result
 
 
 __all__ = [name for name in globals() if name.startswith("browser_")]

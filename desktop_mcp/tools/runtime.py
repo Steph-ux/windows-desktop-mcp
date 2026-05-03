@@ -24,9 +24,6 @@ from ..desktop_core import list_windows_data, focused_window_data
 
 _MACROS: dict[str, list[dict[str, Any]]] = {}
 _MACROS_LOCK = threading.RLock()
-
-
-@mcp.tool()
 @tool_log
 def ping() -> dict[str, Any]:
     """Health check complet du serveur MCP desktop."""
@@ -73,9 +70,6 @@ def ping() -> dict[str, Any]:
             "failsafe": pyautogui.FAILSAFE,
         },
     }
-
-
-@mcp.tool()
 @tool_log
 def clipboard_get() -> dict[str, Any]:
     """Lit le contenu texte du presse-papier Windows."""
@@ -88,9 +82,6 @@ def clipboard_get() -> dict[str, Any]:
     finally:
         win32clipboard.CloseClipboard()
     return {"text": text, "length": len(text)}
-
-
-@mcp.tool()
 @tool_log
 def clipboard_set(text: str) -> dict[str, Any]:
     """Ecrit du texte dans le presse-papier Windows."""
@@ -101,9 +92,6 @@ def clipboard_set(text: str) -> dict[str, Any]:
     finally:
         win32clipboard.CloseClipboard()
     return {"ok": True, "length": len(text)}
-
-
-@mcp.tool()
 @tool_log
 def run_command(
     command: list[str],
@@ -130,9 +118,6 @@ def run_command(
         }
     proc = subprocess.Popen(command, cwd=cwd)
     return {"pid": proc.pid, "command": command}
-
-
-@mcp.tool()
 @tool_log
 def macro_record_action(macro_id: str, action: dict[str, Any]) -> dict[str, Any]:
     """Ajoute une action a un macro en memoire."""
@@ -145,17 +130,11 @@ def macro_record_action(macro_id: str, action: dict[str, Any]) -> dict[str, Any]
         _MACROS.setdefault(macro_id, []).append(entry)
         step_count = len(_MACROS[macro_id])
     return {"macro_id": macro_id, "step_count": step_count}
-
-
-@mcp.tool()
 @tool_log
 def macro_list() -> dict[str, Any]:
     """Liste les macros en memoire et leur nombre d'etapes."""
     with _MACROS_LOCK:
         return {"macros": {macro_id: len(steps) for macro_id, steps in _MACROS.items()}}
-
-
-@mcp.tool()
 @tool_log
 def macro_replay(macro_id: str, speed: float = 1.0) -> dict[str, Any]:
     """Rejoue un macro en memoire."""
@@ -188,9 +167,6 @@ def macro_replay(macro_id: str, speed: float = 1.0) -> dict[str, Any]:
             raise ValueError(f"Unsupported macro action: {action}")
         executed += 1
     return {"macro_id": macro_id, "steps_executed": executed}
-
-
-@mcp.tool()
 @tool_log
 def macro_clear(macro_id: str | None = None) -> dict[str, Any]:
     """Supprime une macro cible ou toutes les macros."""

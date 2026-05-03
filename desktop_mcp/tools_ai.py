@@ -138,9 +138,6 @@ def _save_if_needed(png_bytes: bytes, path: str | None) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(png_bytes)
-
-
-@mcp.tool()
 def screen_annotate(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -229,9 +226,6 @@ def screen_annotate(
     _save_if_needed(annotated_bytes, path)
     record_event("screen_annotate", mode=resolved_mode, count=len(manifest), path=path or "")
     return Image(data=annotated_bytes, format="png")
-
-
-@mcp.tool()
 def browser_annotate_page(
     session_id: str,
     page_id: str | None = None,
@@ -288,9 +282,6 @@ def browser_annotate_page(
     target.write_bytes(annotated_bytes)
     record_event("browser_annotate_page", session_id=session_id, page_id=page_id or "", count=len(manifest), path=str(target))
     return Image(data=annotated_bytes, format="png")
-
-
-@mcp.tool()
 def intent_click(
     intent: str,
     title_regex: str | None = None,
@@ -360,9 +351,6 @@ def _window_text_snapshot(window: Any, use_ocr: bool = True) -> dict[str, Any]:
         except Exception:
             ocr_text = ""
     return {"window": info, "titles": titles, "ocr_text": ocr_text}
-
-
-@mcp.tool()
 def desktop_watch_until(
     condition_type: str,
     condition_value: str = "",

@@ -17,7 +17,12 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pywinauto>=0.6.8",
     "httpx>=0.28.0",
-    "opencv-python-headless>=4.10.0.84",
+    "opencv-python-headless<4.10.0",
+    "numpy<2.0.0",
+    "psutil>=5.9.0",
+    "pywin32>=306",
+    "nest-asyncio>=1.6.0",
+    "selenium>=4.20.0",
 ]
 
 [project.scripts]

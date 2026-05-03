@@ -13,18 +13,12 @@ from PIL import Image as PILImage
 from ..app import mcp
 from ..desktop_core import find_window, focused_window_data, grab_png_bytes, validate_screen_point, window_capture_bounds, window_info
 from ..ocr_core import find_ocr_text_spans, ocr_image_object
-
-
-@mcp.tool()
 def ocr_region(left: int, top: int, width: int, height: int, language: str = "eng") -> dict[str, Any]:
     png_bytes, region = grab_png_bytes({"left": left, "top": top, "width": width, "height": height})
     image = PILImage.open(io.BytesIO(png_bytes))
     result = ocr_image_object(image, language=language)
     result["region"] = region
     return result
-
-
-@mcp.tool()
 def ocr_window(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -43,9 +37,6 @@ def ocr_window(
     result["window"] = info
     result["region"] = region
     return result
-
-
-@mcp.tool()
 def ocr_image_file(path: str, language: str = "eng") -> dict[str, Any]:
     image_path = Path(path)
     if not image_path.exists():
@@ -54,9 +45,6 @@ def ocr_image_file(path: str, language: str = "eng") -> dict[str, Any]:
     result = ocr_image_object(image, language=language)
     result["path"] = str(image_path)
     return result
-
-
-@mcp.tool()
 def find_ocr_text(
     text: str,
     title_regex: str | None = None,
@@ -96,9 +84,6 @@ def find_ocr_text(
             }
         )
     return {"query": text, "exact": exact, "count": len(enriched), "matches": enriched, "region": result["region"]}
-
-
-@mcp.tool()
 def focused_window_text_map(
     language: str = "eng",
     padding: int = 0,
@@ -132,9 +117,6 @@ def focused_window_text_map(
         "word_count": len(words),
         "words": words,
     }
-
-
-@mcp.tool()
 def click_ocr_text(
     text: str,
     title_regex: str | None = None,
@@ -174,9 +156,6 @@ def click_ocr_text(
         "clicks": clicks,
         "match": match,
     }
-
-
-@mcp.tool()
 def click_visible_text(
     text: str,
     title_regex: str | None = None,

@@ -58,14 +58,8 @@ def _window_summary_from_target(
         "ocr_excerpt": ocr_excerpt,
         "ocr_word_count": ocr_word_count,
     }
-
-
-@mcp.tool()
 def list_windows(title_filter: str = "", visible_only: bool = True) -> list[dict[str, Any]]:
     return list_windows_data(title_filter=title_filter, visible_only=visible_only)
-
-
-@mcp.tool()
 def wait_for_window(
     title_regex: str | None = None,
     title_filter: str = "",
@@ -80,33 +74,18 @@ def wait_for_window(
         interval_seconds=interval_seconds,
         visible_only=visible_only,
     )
-
-
-@mcp.tool()
 def focus_window(title_regex: str | None = None, handle: int | None = None, wait_seconds: float = 0.3) -> dict[str, Any]:
     result = focus_window_data(title_regex=title_regex, handle=handle, wait_seconds=wait_seconds)
     record_event("focus_window", handle=result.get("handle"), title=result.get("title"))
     return result
-
-
-@mcp.tool()
 def get_focused_window() -> dict[str, Any]:
     return focused_window_data()
-
-
-@mcp.tool()
 @tool_log
 def get_active_window() -> dict[str, Any]:
     """Retourne la fenetre actuellement au premier plan."""
     return focused_window_data()
-
-
-@mcp.tool()
 def move_resize_window(handle: int, x: int, y: int, width: int, height: int) -> dict[str, Any]:
     return move_resize_window_data(handle=handle, x=x, y=y, width=width, height=height)
-
-
-@mcp.tool()
 def wait_for_focus_change(
     baseline_handle: int | None = None,
     timeout_seconds: float = 10.0,
@@ -123,9 +102,6 @@ def wait_for_focus_change(
     if not result:
         raise ValueError("Timed out waiting for focused window to change.")
     return result
-
-
-@mcp.tool()
 def inspect_ui_tree(title_regex: str | None = None, handle: int | None = None, depth: int = 2, max_nodes: int = 200) -> dict[str, Any]:
     root = find_window(title_regex=title_regex, handle=handle)
     results: list[dict[str, Any]] = []
@@ -154,9 +130,6 @@ def inspect_ui_tree(title_regex: str | None = None, handle: int | None = None, d
 
     walk(root, 0)
     return {"root": window_info(root), "nodes": results}
-
-
-@mcp.tool()
 def find_ui_elements(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -174,9 +147,6 @@ def find_ui_elements(
         info["found_index"] = idx
         items.append(info)
     return {"window": window_info(window), "count": len(matches), "matches": items}
-
-
-@mcp.tool()
 def wait_for_ui_element(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -202,9 +172,6 @@ def wait_for_ui_element(
     if not result:
         raise ValueError("Timed out waiting for a matching UI element.")
     return result
-
-
-@mcp.tool()
 def click_ui_element(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -230,18 +197,12 @@ def click_ui_element(
     else:
         element.click_input()
     return info
-
-
-@mcp.tool()
 def focused_window_summary(use_ocr: bool = True, uia_depth: int = 2, max_nodes: int = 120) -> dict[str, Any]:
     focused = focused_window_data()
     handle = focused.get("handle")
     if not handle:
         raise ValueError("Could not determine the focused window handle.")
     return _window_summary_from_target(handle=int(handle), use_ocr=use_ocr, uia_depth=uia_depth, max_nodes=max_nodes)
-
-
-@mcp.tool()
 def window_summary(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -256,9 +217,6 @@ def window_summary(
         uia_depth=uia_depth,
         max_nodes=max_nodes,
     )
-
-
-@mcp.tool()
 def wait_for_window_content_change(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -313,9 +271,6 @@ def wait_for_window_content_change(
     if not result:
         return {"changed": False, "before_hash": before_hash, "after_hash": before_hash, "summary": baseline_summary}
     return result
-
-
-@mcp.tool()
 def wait_for_text(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -353,9 +308,6 @@ def wait_for_text(
     if not result:
         raise ValueError(f"Timed out waiting for text: {text!r}")
     return result
-
-
-@mcp.tool()
 def click_text(title_regex: str | None = None, handle: int | None = None, text: str = "", found_index: int = 0) -> dict[str, Any]:
     if not text:
         raise ValueError("Provide non-empty text.")
@@ -370,11 +322,33 @@ def click_text(title_regex: str | None = None, handle: int | None = None, text: 
     element, info = matches[found_index]
     element.click_input()
     return info
+def minimize_window(title_regex: str | None = None, handle: int | None = None) -> dict[str, Any]:
+    """Minimize a window by title or handle."""
+    window = find_window(title_regex=title_regex, handle=handle)
+    info = window_info(window)
+    window.minimize()
+    record_event("minimize_window", handle=info.get("handle"), title=info.get("title"))
+    return {**info, "minimized": True}
+def maximize_window(title_regex: str | None = None, handle: int | None = None) -> dict[str, Any]:
+    """Maximize a window by title or handle."""
+    window = find_window(title_regex=title_regex, handle=handle)
+    info = window_info(window)
+    window.maximize()
+    record_event("maximize_window", handle=info.get("handle"), title=info.get("title"))
+    return {**info, "maximized": True}
+def close_window(title_regex: str | None = None, handle: int | None = None) -> dict[str, Any]:
+    """Close a window by title or handle."""
+    window = find_window(title_regex=title_regex, handle=handle)
+    info = window_info(window)
+    window.close()
+    record_event("close_window", handle=info.get("handle"), title=info.get("title"))
+    return {**info, "closed": True}
 
 
 __all__ = [
     "click_text",
     "click_ui_element",
+    "close_window",
     "find_ui_elements",
     "focus_window",
     "focused_window_summary",
@@ -382,6 +356,8 @@ __all__ = [
     "get_focused_window",
     "inspect_ui_tree",
     "list_windows",
+    "maximize_window",
+    "minimize_window",
     "move_resize_window",
     "wait_for_focus_change",
     "wait_for_text",

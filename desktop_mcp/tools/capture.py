@@ -27,23 +27,14 @@ from ..shared.window_utils import find_window, window_info
 from ..runtime import record_event
 from ..state import DESKTOP_WATCH_LOCK, DESKTOP_WATCH_SESSIONS
 from .windows import focused_window_summary, window_summary
-
-
-@mcp.tool()
 def capture_desktop(path: str | None = None) -> Image:
     png_bytes, _ = grab_png_bytes()
     save_png_bytes(png_bytes, path)
     return Image(data=png_bytes, format="png")
-
-
-@mcp.tool()
 def capture_region(left: int, top: int, width: int, height: int, path: str | None = None) -> Image:
     png_bytes, _ = grab_png_bytes({"left": left, "top": top, "width": width, "height": height})
     save_png_bytes(png_bytes, path)
     return Image(data=png_bytes, format="png")
-
-
-@mcp.tool()
 def capture_window(
     title_regex: str | None = None,
     handle: int | None = None,
@@ -58,18 +49,12 @@ def capture_window(
     png_bytes, _ = grab_png_bytes(region)
     save_png_bytes(png_bytes, path)
     return Image(data=png_bytes, format="png")
-
-
-@mcp.tool()
 def capture_focused_window(path: str | None = None, padding: int = 0) -> Image:
     focused = focused_window_data()
     handle = focused.get("handle")
     if not handle:
         raise ValueError("Could not determine the focused window handle.")
     return capture_window(handle=handle, path=path, padding=padding)
-
-
-@mcp.tool()
 def desktop_snapshot_state(path: str | None = None, include_windows: bool = True, title_filter: str = "", max_windows: int = 50) -> dict[str, Any]:
     png_bytes, region = grab_png_bytes()
     target_path = None
@@ -89,9 +74,6 @@ def desktop_snapshot_state(path: str | None = None, include_windows: bool = True
         "window_count": len(windows),
         "windows": windows[: max(1, min(int(max_windows), 200))],
     }
-
-
-@mcp.tool()
 def desktop_overview(
     title_filter: str = "",
     max_windows: int = 10,
@@ -125,17 +107,11 @@ def desktop_overview(
         "window_count": snapshot["window_count"],
         "windows": items,
     }
-
-
-@mcp.tool()
 def save_desktop_screenshot(prefix: str = "desktop") -> dict[str, Any]:
     path = SCREENSHOT_DIR / f"{prefix}-{now_stamp()}.png"
     png_bytes, region = grab_png_bytes()
     path.write_bytes(png_bytes)
     return {"path": str(path), "region": region}
-
-
-@mcp.tool()
 def save_window_screenshot(
     prefix: str = "window",
     title_regex: str | None = None,
@@ -154,9 +130,6 @@ def save_window_screenshot(
     result = {"path": str(path), "window": info, "region": region}
     record_event("save_window_screenshot", path=str(path), handle=info.get("handle"), title=info.get("title"))
     return result
-
-
-@mcp.tool()
 def wait_for_desktop_change(
     baseline_hash: str | None = None,
     timeout_seconds: float = 10.0,
@@ -184,9 +157,6 @@ def wait_for_desktop_change(
     if not result:
         return {"changed": False, "before_hash": before_hash, "after_hash": before_hash, "region": captured_region}
     return result
-
-
-@mcp.tool()
 def screen_watch(
     region: dict[str, int] | None = None,
     change_threshold: float = 0.02,
@@ -212,9 +182,6 @@ def screen_watch(
         before = after
 
     return {"changed": False, "change_ratio": 0.0, "elapsed": max(max_seconds, 0.1), "region": region}
-
-
-@mcp.tool()
 def diff_screenshots(path_a: str, path_b: str, threshold: float = 0.01) -> dict[str, Any]:
     img_a = np.array(PILImage.open(path_a).convert("RGB"))
     img_b = np.array(PILImage.open(path_b).convert("RGB"))
@@ -229,9 +196,6 @@ def diff_screenshots(path_a: str, path_b: str, threshold: float = 0.01) -> dict[
         diff_img.save(target)
         diff_path = str(target)
     return {"changed_ratio": changed_ratio, "changed": changed_ratio > float(threshold), "diff_path": diff_path}
-
-
-@mcp.tool()
 def find_image_on_screen(
     template_path: str,
     confidence: float = 0.8,
@@ -276,9 +240,6 @@ def find_image_on_screen(
         y=center_y,
     )
     return payload
-
-
-@mcp.tool()
 def describe_screen(
     region: dict[str, int] | None = None,
     prompt: str = "Describe what is visible on this screen. Identify the main interactive elements and current state.",
@@ -436,6 +397,69 @@ def _compare_image_paths(before_path: str, after_path: str) -> dict[str, Any]:
     }
 
 
+def _perform_analysis(capture_path: str | None, mode: str, region: dict[str, int] | None, enable_vision: bool) -> dict[str, Any]:
+    """Perform analysis on captured screen."""
+    from .ocr import ocr_region, ocr_image_file
+    
+    result = {"type": "ocr", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    
+    # OCR analysis
+    if capture_path:
+        try:
+            ocr_result = ocr_image_file(capture_path, language="eng")
+            result["ocr"] = {
+                "text": ocr_result.get("text", "")[:500],
+                "word_count": ocr_result.get("word_count", 0),
+            }
+            _log_analysis("ocr", result)
+        except Exception as e:
+            result["ocr_error"] = str(e)
+    
+    # Vision analysis (optional, requires API key)
+    if enable_vision and capture_path:
+        try:
+            import os
+            if os.getenv("ANTHROPIC_API_KEY"):
+                vision_result = describe_screen(
+                    region=region,
+                    prompt="Briefly describe what is visible on this screen.",
+                    max_tokens=300,
+                )
+                result["vision"] = {
+                    "description": vision_result.get("description", "")[:500],
+                    "model": vision_result.get("model"),
+                }
+                _log_analysis("vision", result)
+        except Exception as e:
+            result["vision_error"] = str(e)
+    
+    return result
+
+
+def _log_analysis(analysis_type: str, result: dict[str, Any]) -> None:
+    """Log analysis results to file."""
+    from ..paths import SCREENSHOT_DIR
+    
+    log_path = SCREENSHOT_DIR.parent / "stream_analysis.log"
+    try:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {analysis_type.upper()}: "
+        
+        if analysis_type == "ocr" and "ocr" in result:
+            text = result["ocr"].get("text", "")[:200]
+            words = result["ocr"].get("word_count", 0)
+            log_entry += f"{words} words - {text}"
+        elif analysis_type == "vision" and "vision" in result:
+            desc = result["vision"].get("description", "")[:200]
+            model = result["vision"].get("model", "unknown")
+            log_entry += f"[{model}] {desc}"
+        
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(log_entry + "\n")
+    except Exception:
+        pass
+
+
 def _desktop_watch_sample(
     mode: str,
     handle: int | None,
@@ -446,6 +470,10 @@ def _desktop_watch_sample(
     max_nodes: int,
     capture: bool,
     watch_id: str,
+    enable_analysis: bool = False,
+    analysis_interval: int = 5,
+    enable_vision: bool = False,
+    sample_count: int = 0,
 ) -> dict[str, Any]:
     from .ocr import ocr_region, ocr_window
 
@@ -502,8 +530,17 @@ def _desktop_watch_sample(
             "uia_titles": summary["uia_titles"],
             "ocr_excerpt": summary["ocr_excerpt"],
         }
+    
+    # Add analysis results if enabled and interval matches
+    analysis_result = None
+    if enable_analysis and sample_count % analysis_interval == 0:
+        analysis_result = _perform_analysis(capture_path, mode, region, enable_vision)
+        if analysis_result:
+            payload["analysis"] = analysis_result
+            print(f"[ANALYSIS] {watch_id}: {analysis_result.get('type', 'unknown')}")
+    
     sample_hash = hashlib.sha256(repr(payload).encode("utf-8", errors="replace")).hexdigest()
-    return {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "epoch": round(time.time(), 3), "hash": sample_hash, "summary": summary, "capture_path": capture_path}
+    return {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "epoch": round(time.time(), 3), "hash": sample_hash, "summary": summary, "capture_path": capture_path, "analysis": analysis_result}
 
 
 def _desktop_watch_loop(watch_id: str) -> None:
@@ -523,16 +560,20 @@ def _desktop_watch_loop(watch_id: str) -> None:
             max_nodes = watch["max_nodes"]
             interval_seconds = watch["interval_seconds"]
             capture = watch["capture"]
+            enable_analysis = watch.get("enable_analysis", False)
+            analysis_interval = watch.get("analysis_interval", 5)
+            enable_vision = watch.get("enable_vision", False)
         if stop_event.is_set():
             return
         try:
-            sample = _desktop_watch_sample(mode, handle, title_regex, region, use_ocr, uia_depth, max_nodes, capture, watch_id)
+            sample_count = watch.get("sample_count", 0)
+            sample = _desktop_watch_sample(mode, handle, title_regex, region, use_ocr, uia_depth, max_nodes, capture, watch_id, enable_analysis, analysis_interval, enable_vision, sample_count)
             consecutive_errors = 0
             with DESKTOP_WATCH_LOCK:
                 current = DESKTOP_WATCH_SESSIONS.get(watch_id)
                 if current:
                     last_hash = current.get("last_hash")
-                    current["sample_count"] += 1
+                    current["sample_count"] = sample_count + 1
                     if sample["hash"] != last_hash:
                         current["change_count"] += 1
                         current["last_hash"] = sample["hash"]
@@ -568,9 +609,6 @@ def stop_all_desktop_watch_sessions() -> dict[str, Any]:
         ids = list(DESKTOP_WATCH_SESSIONS.keys())
     results = [_stop_desktop_watch_session(watch_id) for watch_id in ids]
     return {"stopped": len([item for item in results if item["stopped"]]), "results": results}
-
-
-@mcp.tool()
 def desktop_perception_snapshot(
     mode: str = "focused",
     title_regex: str | None = None,
@@ -619,9 +657,6 @@ def desktop_perception_snapshot(
         capture_path = str(capture_target)
         image_hash = hashlib.sha256(capture_target.read_bytes()).hexdigest()
     return {"mode": resolved_mode, "capture_path": capture_path, "image_hash": image_hash, "summary": summary}
-
-
-@mcp.tool()
 def compare_capture_images(before_path: str, after_path: str) -> dict[str, Any]:
     before = Path(before_path)
     after = Path(after_path)
@@ -630,9 +665,6 @@ def compare_capture_images(before_path: str, after_path: str) -> dict[str, Any]:
     if not after.exists():
         raise ValueError(f"Image file not found: {after_path}")
     return {"before_path": str(before), "after_path": str(after), **_compare_image_paths(str(before), str(after))}
-
-
-@mcp.tool()
 def desktop_watch_start(
     mode: str = "focused",
     title_regex: str | None = None,
@@ -647,6 +679,9 @@ def desktop_watch_start(
     use_ocr: bool = True,
     uia_depth: int = 2,
     max_nodes: int = 120,
+    enable_analysis: bool = False,
+    analysis_interval: int = 5,
+    enable_vision: bool = False,
 ) -> dict[str, Any]:
     resolved_mode = (mode or "focused").lower()
     if resolved_mode not in {"focused", "window", "desktop", "region"}:
@@ -678,26 +713,23 @@ def desktop_watch_start(
         "change_count": 0,
         "last_hash": None,
         "last_error": None,
+        "enable_analysis": enable_analysis,
+        "analysis_interval": max(1, int(analysis_interval)),
+        "enable_vision": enable_vision,
     }
     thread = threading.Thread(target=_desktop_watch_loop, args=(watch_id,), daemon=True)
     watch["thread"] = thread
     with DESKTOP_WATCH_LOCK:
         DESKTOP_WATCH_SESSIONS[watch_id] = watch
     thread.start()
-    record_event("desktop_watch_start", watch_id=watch_id, mode=resolved_mode, handle=handle, title_regex=title_regex)
-    return {"watch_id": watch_id, "mode": resolved_mode, "handle": handle, "title_regex": title_regex, "region": region, "interval_seconds": watch["interval_seconds"], "capture": capture}
-
-
-@mcp.tool()
+    record_event("desktop_watch_start", watch_id=watch_id, mode=resolved_mode, handle=handle, title_regex=title_regex, enable_analysis=enable_analysis)
+    return {"watch_id": watch_id, "mode": resolved_mode, "handle": handle, "title_regex": title_regex, "region": region, "interval_seconds": watch["interval_seconds"], "capture": capture, "enable_analysis": enable_analysis}
 def desktop_watch_list() -> dict[str, Any]:
     with DESKTOP_WATCH_LOCK:
         items = []
         for watch_id, watch in DESKTOP_WATCH_SESSIONS.items():
             items.append({"watch_id": watch_id, "mode": watch["mode"], "handle": watch.get("handle"), "title_regex": watch.get("title_regex"), "region": watch.get("region"), "interval_seconds": watch["interval_seconds"], "capture": watch["capture"], "sample_count": watch["sample_count"], "change_count": watch["change_count"], "last_error": watch.get("last_error")})
     return {"count": len(items), "watches": items}
-
-
-@mcp.tool()
 def desktop_watch_get_states(watch_id: str, limit: int = 10) -> dict[str, Any]:
     with DESKTOP_WATCH_LOCK:
         watch = DESKTOP_WATCH_SESSIONS.get(watch_id)
@@ -706,9 +738,6 @@ def desktop_watch_get_states(watch_id: str, limit: int = 10) -> dict[str, Any]:
         states = list(watch["history"])[-max(1, min(int(limit), 100)) :]
         summary = {"watch_id": watch_id, "mode": watch["mode"], "sample_count": watch["sample_count"], "change_count": watch["change_count"], "last_error": watch.get("last_error")}
     return {**summary, "count": len(states), "states": states}
-
-
-@mcp.tool()
 def desktop_watch_get_change_summary(watch_id: str, limit: int = 20) -> dict[str, Any]:
     with DESKTOP_WATCH_LOCK:
         watch = DESKTOP_WATCH_SESSIONS.get(watch_id)
@@ -717,9 +746,6 @@ def desktop_watch_get_change_summary(watch_id: str, limit: int = 20) -> dict[str
         states = list(watch["history"])[-max(1, min(int(limit), 100)) :]
         meta = {"watch_id": watch_id, "mode": watch["mode"], "sample_count": watch["sample_count"], "change_count": watch["change_count"], "last_error": watch.get("last_error")}
     return {**meta, **_watch_change_summary(states)}
-
-
-@mcp.tool()
 def desktop_watch_compare_latest_frames(watch_id: str) -> dict[str, Any]:
     with DESKTOP_WATCH_LOCK:
         watch = DESKTOP_WATCH_SESSIONS.get(watch_id)
@@ -732,9 +758,6 @@ def desktop_watch_compare_latest_frames(watch_id: str) -> dict[str, Any]:
     after = states[-1]
     comparison = _compare_image_paths(before["capture_path"], after["capture_path"])
     return {"watch_id": watch_id, "before_ts": before.get("ts"), "after_ts": after.get("ts"), "before_path": before.get("capture_path"), "after_path": after.get("capture_path"), **comparison}
-
-
-@mcp.tool()
 def desktop_watch_get_latest_capture(watch_id: str) -> Image:
     with DESKTOP_WATCH_LOCK:
         watch = DESKTOP_WATCH_SESSIONS.get(watch_id)
@@ -750,9 +773,6 @@ def desktop_watch_get_latest_capture(watch_id: str) -> Image:
     if not path.exists():
         raise ValueError(f"Latest desktop watch capture not found: {capture_path}")
     return Image(data=path.read_bytes(), format="png")
-
-
-@mcp.tool()
 def desktop_watch_wait_change(watch_id: str, baseline_change_count: int | None = None, timeout_seconds: float = 10.0, interval_seconds: float = 0.2) -> dict[str, Any]:
     deadline = time.time() + max(timeout_seconds, 0.1)
     with DESKTOP_WATCH_LOCK:
@@ -780,16 +800,10 @@ def desktop_watch_wait_change(watch_id: str, baseline_change_count: int | None =
             return {"watch_id": watch_id, "stopped": True}
         latest = list(current["history"])[-1] if current["history"] else None
         return {"watch_id": watch_id, "changed": False, "change_count": current["change_count"], "sample_count": current["sample_count"], "latest_state": latest}
-
-
-@mcp.tool()
 def desktop_watch_stop(watch_id: str) -> dict[str, Any]:
     result = _stop_desktop_watch_session(watch_id)
     record_event("desktop_watch_stop", **result)
     return result
-
-
-@mcp.tool()
 def watch_until_goal(
     goal_description: str,
     max_seconds: float = 10.0,
@@ -854,6 +868,50 @@ def watch_until_goal(
         raise ValueError(f"Timed out waiting for goal: {goal!r}")
     record_event("watch_until_goal", goal=goal, source=result.get("source"))
     return result
+def start_mjpeg_stream(port: int = 8080) -> dict[str, Any]:
+    """Start MJPEG streaming server for screen capture."""
+    from ..streaming import start_mjpeg_server as _start_server
+    
+    result = _start_server(port=port)
+    record_event("start_mjpeg_stream", port=port, running=result["running"])
+    return result
+def stop_mjpeg_stream() -> dict[str, Any]:
+    """Stop MJPEG streaming server."""
+    from ..streaming import stop_mjpeg_server as _stop_server
+    
+    result = _stop_server()
+    record_event("stop_mjpeg_stream", running=result["running"])
+    return result
+def get_mjpeg_status() -> dict[str, Any]:
+    """Get MJPEG server status."""
+    from ..streaming import get_mjpeg_status as _get_status
+    
+    return _get_status()
+def get_latest_analysis(watch_id: str, limit: int = 10) -> dict[str, Any]:
+    """Get latest analysis results from a watch session."""
+    with DESKTOP_WATCH_LOCK:
+        watch = DESKTOP_WATCH_SESSIONS.get(watch_id)
+        if not watch:
+            raise ValueError(f"Unknown desktop watch session: {watch_id}")
+        states = [state for state in list(watch["history"])[-max(1, min(int(limit), 100)):] if state.get("analysis")]
+    return {"watch_id": watch_id, "count": len(states), "analyses": states}
+def export_analysis_history(watch_id: str, path: str) -> dict[str, Any]:
+    """Export analysis history to JSON file."""
+    import json
+    from pathlib import Path
+    
+    with DESKTOP_WATCH_LOCK:
+        watch = DESKTOP_WATCH_SESSIONS.get(watch_id)
+        if not watch:
+            raise ValueError(f"Unknown desktop watch session: {watch_id}")
+        analyses = [state for state in list(watch["history"]) if state.get("analysis")]
+    
+    export_path = Path(path)
+    export_path.parent.mkdir(parents=True, exist_ok=True)
+    export_path.write_text(json.dumps(analyses, indent=2))
+    
+    record_event("export_analysis_history", watch_id=watch_id, path=str(path), count=len(analyses))
+    return {"watch_id": watch_id, "path": str(export_path), "count": len(analyses)}
 
 
 __all__ = [
@@ -880,6 +938,11 @@ __all__ = [
     "save_desktop_screenshot",
     "save_window_screenshot",
     "screen_watch",
+    "start_mjpeg_stream",
+    "stop_mjpeg_stream",
+    "get_mjpeg_status",
+    "get_latest_analysis",
+    "export_analysis_history",
     "stop_all_desktop_watch_sessions",
     "wait_for_desktop_change",
     "watch_until_goal",
