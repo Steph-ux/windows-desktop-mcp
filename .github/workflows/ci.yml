@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout
@@ -22,11 +22,28 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install Tesseract OCR
+        run: choco install tesseract -y --no-progress
+
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install package
-        run: python -m pip install -e .
+      - name: Install package with dev deps
+        run: python -m pip install -e ".[dev]"
 
-      - name: Run tests
-        run: python -m pytest tests/test_windows_mcp.py -q -p no:cacheprovider
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v --tb=short -p no:cacheprovider
+
+  lint:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Ruff check
+        run: ruff check desktop_mcp/ --select E,F,W --ignore E501

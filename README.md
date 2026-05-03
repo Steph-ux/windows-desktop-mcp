@@ -1,66 +1,89 @@
-# Windows Desktop MCP
+# windows-desktop-mcp
 
-Full Windows desktop, browser, and system control via **15 MCP tools**.
+[![CI](https://github.com/Steph-ux/windows-desktop-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Steph-ux/windows-desktop-mcp/actions)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-240+ capabilities consolidated into action-parameterized super-tools — each tool accepts an `action` parameter + `timeout_ms` for safe dispatch with structured error handling.
+Windows desktop & browser control MCP server — **15 super-tools** for full automation.
 
-## Tools
+## Install
 
-| Tool | Actions | What it does |
-|------|---------|----|
-| `browser_session` | 28 | Lifecycle, instances, profiles, presets |
-| `browser_navigate` | 9 | Navigation, tabs, scroll |
-| `browser_content` | 16 | DOM, JS eval, frames, shadow DOM, annotations |
-| `browser_interact` | 13 | Click, type, fill, upload |
-| `browser_observe` | 13 | Screenshots, wait conditions |
-| `browser_network` | 17 | Network, cookies, console, intercepts, permissions |
-| `browser_debug` | 17 | Traces, coverage, CDP DevTools, metrics |
-| `desktop_interact` | 22 | Click, mouse, keyboard, clipboard, macros |
-| `desktop_window` | 13 | Window management, UI inspection |
-| `desktop_observe` | 34 | Capture, stream, OCR, **smart OCR**, video recording, multi-monitor |
-| `desktop_monitor` | 16 | Watch sessions, wait conditions |
-| `system_info` | 25 | Sysinfo, env, network, services, registry, power |
-| `system_ops` | 14 | Files, archives, processes |
-| `runtime` | 7 | Health, events, analysis |
-| `workflow` | 7 | **Autonomous action chaining** — run, record, replay |
+```bash
+pip install windows-desktop-mcp
+playwright install chromium
+```
 
-## New capabilities
+## Quick Start
 
-- 🎥 **Video recording** — capture desktop sessions as WebM/GIF (`record_start`, `record_stop`)
-- 🧠 **Smart OCR** — `ocr_smart` (find elements by description), `screen_understand`, `suggest_actions`
-- 🖥️ **Multi-monitor** — enumerate, capture, and coordinate across displays
-- 🔗 **Workflows** — chain MCP actions into reusable JSON sequences with variable substitution
-- 🛡️ **Safe dispatch** — structured `{ok, error, trace}` responses, per-action `timeout_ms`
+```json
+{
+  "mcpServers": {
+    "desktop-mcp": {
+      "command": "windows-desktop-mcp"
+    }
+  }
+}
+```
 
-## Usage
+## Super-Tools (15)
+
+| Tool | Actions | Domain |
+|---|---|---|
+| `browser_session` | open, close, attach_cdp, profiles, presets… | Browser lifecycle |
+| `browser_navigate` | goto, back, forward, scroll, pages… | Navigation |
+| `browser_content` | DOM, text, eval, frames, shadow DOM… | Content |
+| `browser_interact` | click, type, fill, upload… | Interaction |
+| `browser_observe` | screenshots, wait conditions… | Observation |
+| `browser_network` | cookies, intercept, HAR, storage… | Network |
+| `browser_debug` | traces, coverage, CDP, metrics… | Debug |
+| `desktop_interact` | click, keyboard, mouse, clipboard, macros | Desktop input |
+| `desktop_window` | list, focus, resize, UI inspect… | Windows |
+| `desktop_observe` | capture, OCR, smart OCR, video, monitors | Vision |
+| `desktop_monitor` | watchers, wait conditions… | Monitoring |
+| `system_info` | sysinfo, network, services, registry… | System |
+| `system_ops` | files, processes, archives… | Operations |
+| `runtime` | health, events, status… | MCP runtime |
+| `workflow` | run, record, templates, plugins… | Automation |
+
+## Key Features
+
+- **Smart OCR** — fuzzy text matching on screen with element positions
+- **Video Recording** — capture desktop sessions as WebM/GIF
+- **Multi-Monitor** — capture and interact across all displays
+- **Workflow Engine** — chain actions, use variables, pre-built templates
+- **Plugin System** — drop `.py` files in `~/.pm/desktop-mcp/plugins/`
+- **CDP Attach** — connect to an existing Chrome browser with your cookies
+- **Thread-Safe** — async dispatcher with `anyio.to_thread` for Playwright
+
+## Workflow Templates
 
 ```python
-# Navigate to a URL
-browser_navigate(action="goto", url="https://example.com")
+# List available templates
+workflow → template_list
 
-# Smart OCR: find element by description
-desktop_observe(action="ocr_smart", prompt="find the login button")
-
-# Record a video
-desktop_observe(action="record_start", output_name="demo")
-
-# Run a workflow
-workflow(action="run", steps=[
-    {"tool": "browser_navigate", "action": "goto", "url": "https://example.com"},
-    {"tool": "browser_observe", "action": "capture"}
-])
+# Instantiate a login flow
+workflow → template_instantiate(template_id="login_flow", variables={"url": "...", "username": "..."})
 ```
 
-## Install & Run
+Built-in templates: `scrape_page`, `screenshot_flow`, `fill_form`, `login_flow`, `search_and_extract`, `desktop_screenshot_report`
 
-```powershell
-pip install -e .
-windows-desktop-mcp
+## Plugins
+
+Create `~/.pm/desktop-mcp/plugins/my_tool.py`:
+
+```python
+TOOL_NAME = "my_tool"
+TOOL_DOC = "My custom tool.\nActions: greet"
+ACTIONS = {
+    "greet": lambda name="World": {"message": f"Hello, {name}!"},
+}
 ```
+
+Restart the server — your tool appears automatically.
 
 ## Requirements
 
-- Windows only
-- Playwright (`playwright install chromium`) for browser tools
-- Tesseract on PATH for OCR features
-- ffmpeg on PATH for WebM video (optional, GIF fallback via Pillow)
+- Windows 10/11
+- Python 3.10+
+- Tesseract OCR (`choco install tesseract`)
+- Playwright (`playwright install chromium`)

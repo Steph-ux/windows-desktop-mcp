@@ -234,5 +234,102 @@ class TestSmartOCR:
         assert len(result) == 0
 
 
+
+class TestWorkflowTemplates:
+    """Test pre-built workflow templates."""
+
+    def test_template_list(self):
+        """template_list should return all built-in templates."""
+        from desktop_mcp.tools.workflow_templates import template_list
+        result = template_list()
+        assert "templates" in result
+        assert len(result["templates"]) >= 6
+        ids = [t["id"] for t in result["templates"]]
+        assert "scrape_page" in ids
+        assert "login_flow" in ids
+
+    def test_template_get(self):
+        """template_get should return full template definition."""
+        from desktop_mcp.tools.workflow_templates import template_get
+        result = template_get("scrape_page")
+        assert result["ok"] is True
+        assert "steps" in result
+        assert len(result["steps"]) >= 2
+
+    def test_template_get_unknown(self):
+        """template_get should error for unknown template."""
+        from desktop_mcp.tools.workflow_templates import template_get
+        result = template_get("nonexistent")
+        assert "error" in result
+
+    def test_template_instantiate(self):
+        """template_instantiate should substitute variables."""
+        from desktop_mcp.tools.workflow_templates import template_instantiate
+        result = template_instantiate("scrape_page", {"url": "https://test.com"})
+        assert result["ok"] is True
+        assert result["variables"]["url"] == "https://test.com"
+        # Check URL was substituted in steps
+        step0 = result["steps"][0]
+        assert step0.get("url") == "https://test.com"
+
+    def test_template_instantiate_invalid_json(self):
+        """template_instantiate with bad JSON variables should error."""
+        from desktop_mcp.tools.workflow_templates import template_instantiate
+        result = template_instantiate("scrape_page", "bad json")
+        assert "error" in result
+
+    def test_templates_registered_in_workflow(self):
+        """Template actions should be in the workflow tool registry."""
+        from desktop_mcp.tools.consolidated import R
+        _, actions = R["workflow"]
+        assert "template_list" in actions
+        assert "template_get" in actions
+        assert "template_instantiate" in actions
+
+
+class TestPluginSystem:
+    """Test the plugin auto-discovery system."""
+
+    def test_discover_plugins_returns_dict(self):
+        """discover_plugins should return a dict."""
+        from desktop_mcp.tools.plugins import discover_plugins
+        result = discover_plugins()
+        assert isinstance(result, dict)
+
+    def test_plugin_dir_created(self):
+        """Plugin directory should be created on first run."""
+        from desktop_mcp.tools.plugins import PLUGIN_DIR
+        assert PLUGIN_DIR.exists()
+
+    def test_example_plugin_created(self):
+        """Example plugin file should exist."""
+        from desktop_mcp.tools.plugins import PLUGIN_DIR
+        example = PLUGIN_DIR / "_example.py"
+        assert example.exists()
+
+    def test_load_plugin_file_valid(self, tmp_path):
+        """Loading a valid plugin file should return name, doc, actions."""
+        from desktop_mcp.tools.plugins import _load_plugin_file
+        plugin_file = tmp_path / "test_plugin.py"
+        plugin_file.write_text('''
+TOOL_NAME = "test_tool"
+TOOL_DOC = "Test tool.\\nActions: hello"
+ACTIONS = {"hello": lambda: {"ok": True}}
+''')
+        result = _load_plugin_file(plugin_file)
+        assert result is not None
+        name, doc, actions = result
+        assert name == "test_tool"
+        assert "hello" in actions
+
+    def test_load_plugin_file_missing_attrs(self, tmp_path):
+        """Plugin without TOOL_NAME should be skipped."""
+        from desktop_mcp.tools.plugins import _load_plugin_file
+        plugin_file = tmp_path / "bad_plugin.py"
+        plugin_file.write_text("x = 1\n")
+        result = _load_plugin_file(plugin_file)
+        assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

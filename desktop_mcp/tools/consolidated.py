@@ -323,15 +323,28 @@ R["runtime"] = (
     "ping": _rt.ping,
 })
 
-# ═══ WORKFLOW (1) — NEW ════════════════════════════════════════════
+from . import workflow_templates as _wt
+from .plugins import discover_plugins as _discover_plugins
 
 R["workflow"] = (
     "Autonomous workflow engine — chain actions into reusable sequences.\n"
-    "Actions: run, record_start, record_step, record_stop, list, load, delete", {
+    "Actions: run, record_start, record_step, record_stop, list, load, delete, "
+    "template_list, template_get, template_instantiate", {
     "run": _wf.workflow_run, "record_start": _wf.workflow_record_start,
     "record_step": _wf.workflow_record_step, "record_stop": _wf.workflow_record_stop,
     "list": _wf.workflow_list, "load": _wf.workflow_load, "delete": _wf.workflow_delete,
+    # Templates
+    "template_list": _wt.template_list,
+    "template_get": _wt.template_get,
+    "template_instantiate": _wt.template_instantiate,
 })
+
+# ═══ PLUGINS (AUTO-DISCOVERED) ═════════════════════════════════════
+from .plugins import discover_plugins as _discover_plugins
+
+for _pname, (_pdoc, _pactions) in _discover_plugins().items():
+    if _pname not in R:
+        R[_pname] = (_pdoc, _pactions)
 
 # ═══ DYNAMIC REGISTRATION ══════════════════════════════════════════
 import json as _json
