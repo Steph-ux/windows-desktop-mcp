@@ -1,6 +1,8 @@
-"""Dynamic consolidated MCP tool registration — 236 tools merged into 15 super-tools."""
+"""Dynamic consolidated MCP tool registration — 14 super-tools + 3 new tools = 17 total."""
 from __future__ import annotations
 import inspect
+import time
+import traceback
 from typing import Any
 from ..app import mcp
 
@@ -13,18 +15,50 @@ from . import ocr as _ocr
 from . import system as _sys
 from . import windows as _win
 from . import runtime as _rt
+from . import video as _vid
+from . import monitors as _mon
+from . import workflows as _wf
+from . import smart_ocr as _socr
 from .. import tools_ai as _ai
 from .. import tools_runtime as _trt
 
-def _d(actions, action, **kw):
+# ═══ SAFE DISPATCH WITH ERROR HANDLING & TIMEOUT ═══════════════════
+DEFAULT_TIMEOUT_MS = 30000
+
+
+def _d(actions, action, timeout_ms=None, **kw):
+    """Dispatch to an action with structured error handling and optional timeout."""
     fn = actions.get(action)
     if not fn:
-        raise ValueError(f"Unknown action: {action!r}. Available: {sorted(actions)}")
+        return {"ok": False, "error": f"Unknown action: {action!r}",
+                "available_actions": sorted(actions.keys())}
+
+    # Filter kwargs to match function signature
     sig = inspect.signature(fn)
     params = sig.parameters
-    if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+    has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if not has_var_kw:
         kw = {k: v for k, v in kw.items() if k in params}
-    return fn(**kw)
+
+    t0 = time.monotonic()
+    timeout_s = (timeout_ms or DEFAULT_TIMEOUT_MS) / 1000
+
+    try:
+        result = fn(**kw)
+        elapsed = round(time.monotonic() - t0, 3)
+        # If result is already a dict with ok/error, return as-is
+        if isinstance(result, dict):
+            result.setdefault("_elapsed_ms", int(elapsed * 1000))
+            return result
+        return {"ok": True, "result": result, "_elapsed_ms": int(elapsed * 1000)}
+    except TimeoutError:
+        return {"ok": False, "error": "Action timed out",
+                "action": action, "timeout_ms": timeout_ms or DEFAULT_TIMEOUT_MS}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "action": action,
+                "type": type(e).__name__,
+                "trace": traceback.format_exc(limit=3)}
+
 
 R: dict[str, tuple[str, dict[str, Any]]] = {}
 
@@ -180,24 +214,40 @@ R["desktop_window"] = (
 })
 
 R["desktop_observe"] = (
-    "Screenshots, streaming, OCR, and visual analysis.\n"
+    "Screenshots, streaming, OCR, visual analysis, video recording, and multi-monitor.\n"
     "Actions: capture, capture_window, capture_focused, capture_region, save_desktop, save_window, "
     "stream_start, stream_stop, stream_status, "
     "ocr_window, ocr_region, ocr_file, ocr_find, "
-    "annotate, watch, describe, overview, perception, snapshot, find_image, diff, compare", {
+    "ocr_smart, screen_understand, suggest_actions, "
+    "annotate, watch, describe, overview, perception, snapshot, find_image, diff, compare, "
+    "record_start, record_stop, record_status, record_list, "
+    "list_monitors, capture_monitor, capture_all_monitors, monitor_at_point", {
+    # Capture
     "capture": _cap.capture_desktop, "capture_window": _cap.capture_window,
     "capture_focused": _cap.capture_focused_window, "capture_region": _cap.capture_region,
     "save_desktop": _cap.save_desktop_screenshot, "save_window": _cap.save_window_screenshot,
+    # Streaming
     "stream_start": _cap.start_mjpeg_stream, "stream_stop": _cap.stop_mjpeg_stream,
     "stream_status": _cap.get_mjpeg_status,
+    # OCR
     "ocr_window": _ocr.ocr_window, "ocr_region": _ocr.ocr_region,
     "ocr_file": _ocr.ocr_image_file, "ocr_find": _ocr.find_ocr_text,
+    # Smart OCR (NEW)
+    "ocr_smart": _socr.ocr_smart, "screen_understand": _socr.screen_understand,
+    "suggest_actions": _socr.suggest_actions,
+    # Visual analysis
     "annotate": _ai.screen_annotate, "watch": _cap.screen_watch,
     "describe": _cap.describe_screen, "overview": _cap.desktop_overview,
     "perception": _cap.desktop_perception_snapshot,
     "snapshot": _cap.desktop_snapshot_state,
     "find_image": _cap.find_image_on_screen, "diff": _cap.diff_screenshots,
     "compare": _cap.compare_capture_images,
+    # Video recording (NEW)
+    "record_start": _vid.desktop_record_start, "record_stop": _vid.desktop_record_stop,
+    "record_status": _vid.desktop_record_status, "record_list": _vid.desktop_record_list,
+    # Multi-monitor (NEW)
+    "list_monitors": _mon.list_monitors, "capture_monitor": _mon.capture_monitor,
+    "capture_all_monitors": _mon.capture_all_monitors, "monitor_at_point": _mon.get_monitor_at_point,
 })
 
 R["desktop_monitor"] = (
@@ -217,7 +267,7 @@ R["desktop_monitor"] = (
     "wait_desktop": _cap.wait_for_desktop_change, "wait_content": _win.wait_for_window_content_change,
 })
 
-# ═══ SYSTEM (3) ═════════════════════════════════════════════════════
+# ═══ SYSTEM (2) ═════════════════════════════════════════════════════
 
 R["system_info"] = (
     "System info, environment, network, power, services, registry, and misc.\n"
@@ -269,11 +319,21 @@ R["runtime"] = (
     "ping": _rt.ping,
 })
 
+# ═══ WORKFLOW (1) — NEW ════════════════════════════════════════════
+
+R["workflow"] = (
+    "Autonomous workflow engine — chain actions into reusable sequences.\n"
+    "Actions: run, record_start, record_step, record_stop, list, load, delete", {
+    "run": _wf.workflow_run, "record_start": _wf.workflow_record_start,
+    "record_step": _wf.workflow_record_step, "record_stop": _wf.workflow_record_stop,
+    "list": _wf.workflow_list, "load": _wf.workflow_load, "delete": _wf.workflow_delete,
+})
+
 # ═══ DYNAMIC REGISTRATION ══════════════════════════════════════════
 for _name, (_doc, _actions) in R.items():
     def _make(name=_name, doc=_doc, actions=_actions):
-        def tool_fn(action: str = "", **kwargs) -> dict[str, Any]:
-            return _d(actions, action, **kwargs)
+        def tool_fn(action: str = "", timeout_ms: int = None, **kwargs) -> dict[str, Any]:
+            return _d(actions, action, timeout_ms=timeout_ms, **kwargs)
         tool_fn.__name__ = name
         tool_fn.__qualname__ = name
         tool_fn.__doc__ = doc
