@@ -330,12 +330,21 @@ R["workflow"] = (
 })
 
 # ═══ DYNAMIC REGISTRATION ══════════════════════════════════════════
+import json as _json
+
 for _name, (_doc, _actions) in R.items():
     def _make(name=_name, doc=_doc, actions=_actions):
-        def tool_fn(action: str = "", timeout_ms: int = None, **kwargs) -> dict[str, Any]:
-            return _d(actions, action, timeout_ms=timeout_ms, **kwargs)
+        def tool_fn(action: str = "", kwargs: str = "{}", timeout_ms: int = None) -> dict[str, Any]:
+            try:
+                kw = _json.loads(kwargs) if isinstance(kwargs, str) else kwargs
+            except _json.JSONDecodeError:
+                return {"ok": False, "error": f"Invalid kwargs JSON: {kwargs!r}"}
+            if not isinstance(kw, dict):
+                return {"ok": False, "error": f"kwargs must be a JSON object, got {type(kw).__name__}"}
+            return _d(actions, action, timeout_ms=timeout_ms, **kw)
         tool_fn.__name__ = name
         tool_fn.__qualname__ = name
         tool_fn.__doc__ = doc
         return tool_fn
     mcp.tool()(_make())
+
