@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from urllib.parse import quote_plus
 
 from ..browser_core import get_playwright_page
 from ..runtime import record_event
+from ..state import PLAYWRIGHT_SESSIONS, PLAYWRIGHT_SESSIONS_LOCK
+from . import browser_sessions as _bs
 from .agent_browser import agent_browser_start
 
 _PLATFORM_ALIASES = {
@@ -140,6 +143,9 @@ _EXTRACTORS = {
     "instagram": _INSTAGRAM_EXTRACTOR,
 }
 
+_DEFAULT_EXTRACT_WAIT_MS = 10000
+_DEFAULT_EXTRACT_POLL_MS = 250
+
 
 def _platform(platform: str) -> str:
     key = str(platform or "").strip().lower().replace(" ", "_")
@@ -190,30 +196,166 @@ def social_supported_platforms() -> dict[str, Any]:
     }
 
 
-def social_extract(platform: str, session_id: str, page_id: str | None = None, limit: int = 10) -> dict[str, Any]:
+def social_extract(
+    platform: str,
+    session_id: str,
+    page_id: str | None = None,
+    limit: int = 10,
+    wait_ms: int = _DEFAULT_EXTRACT_WAIT_MS,
+    poll_ms: int = _DEFAULT_EXTRACT_POLL_MS,
+) -> dict[str, Any]:
     """Extract visible social media items from the current page through DOM/CDP."""
     target = _platform(platform)
     safe_limit = max(1, min(int(limit), 100))
-    _session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
-    script = _EXTRACTORS[target]
-    raw_items = page.evaluate(script, safe_limit)
-    items = _normalize_items(raw_items, target, safe_limit)
-    record_event("social_media_extract", platform=target, session_id=session_id, page_id=resolved_page_id, item_count=len(items))
+    snapshot = _playwright_session_snapshot(session_id)
+    try:
+        session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+        return _extract_from_page(
+            target=target,
+            session_id=session_id,
+            page_id=resolved_page_id,
+            page=page,
+            safe_limit=safe_limit,
+            wait_ms=wait_ms,
+            poll_ms=poll_ms,
+            automation="cdp" if session.get("cdp_endpoint") else "playwright",
+        )
+    except Exception as exc:
+        if not _is_stale_cdp_thread_error(exc) or not snapshot.get("cdp_endpoint"):
+            raise
+        return _extract_from_reattached_cdp(
+            target=target,
+            original_session_id=session_id,
+            page_id=page_id,
+            safe_limit=safe_limit,
+            wait_ms=wait_ms,
+            poll_ms=poll_ms,
+            snapshot=snapshot,
+        )
+
+
+def _extract_from_page(
+    target: str,
+    session_id: str,
+    page_id: str,
+    page: Any,
+    safe_limit: int,
+    wait_ms: int,
+    poll_ms: int,
+    automation: str,
+) -> dict[str, Any]:
+    items, attempts, waited_ms = _evaluate_items_with_wait(
+        page=page,
+        target=target,
+        safe_limit=safe_limit,
+        wait_ms=wait_ms,
+        poll_ms=poll_ms,
+    )
+    record_event("social_media_extract", platform=target, session_id=session_id, page_id=page_id, item_count=len(items))
     return {
         "ok": True,
         "platform": target,
         "session_id": session_id,
-        "page_id": resolved_page_id,
+        "page_id": page_id,
         "url": getattr(page, "url", ""),
         "read_only": True,
         "browser_context": "agent_dedicated",
-        "automation": "playwright",
+        "automation": automation,
         "host_interactive": False,
         "extraction_method": "dom",
         "source": "dom",
         "items": items,
         "item_count": len(items),
+        "extract_attempts": attempts,
+        "extract_waited_ms": waited_ms,
     }
+
+
+def _evaluate_items_with_wait(
+    page: Any,
+    target: str,
+    safe_limit: int,
+    wait_ms: int,
+    poll_ms: int,
+) -> tuple[list[dict[str, Any]], int, int]:
+    script = _EXTRACTORS[target]
+    deadline = time.monotonic() + max(int(wait_ms), 0) / 1000
+    poll_seconds = max(int(poll_ms), 0) / 1000
+    attempts = 0
+    started_at = time.monotonic()
+    items: list[dict[str, Any]] = []
+
+    while True:
+        attempts += 1
+        raw_items = page.evaluate(script, safe_limit)
+        items = _normalize_items(raw_items, target, safe_limit)
+        if items or time.monotonic() >= deadline:
+            waited_ms = int((time.monotonic() - started_at) * 1000)
+            return items, attempts, waited_ms
+        sleep_seconds = min(poll_seconds, max(deadline - time.monotonic(), 0))
+        if sleep_seconds <= 0:
+            waited_ms = int((time.monotonic() - started_at) * 1000)
+            return items, attempts, waited_ms
+        time.sleep(sleep_seconds)
+
+
+def _playwright_session_snapshot(session_id: str) -> dict[str, Any]:
+    with PLAYWRIGHT_SESSIONS_LOCK:
+        session = PLAYWRIGHT_SESSIONS.get(session_id)
+        if not session:
+            return {}
+        return {
+            "session_id": session.get("session_id"),
+            "browser_name": session.get("browser_name"),
+            "profile_name": session.get("profile_name"),
+            "instance_name": session.get("instance_name"),
+            "cdp_endpoint": session.get("cdp_endpoint"),
+            "browser_pid": session.get("browser_pid"),
+            "launched_debug_browser": session.get("launched_debug_browser"),
+            "init_script_paths": list(session.get("init_script_paths") or []),
+            "granted_permissions": list(session.get("granted_permissions") or []),
+        }
+
+
+def _is_stale_cdp_thread_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "greenlet" in text or "cannot switch to a different thread" in text
+
+
+def _extract_from_reattached_cdp(
+    target: str,
+    original_session_id: str,
+    page_id: str | None,
+    safe_limit: int,
+    wait_ms: int,
+    poll_ms: int,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    attached = _bs.browser_attach_cdp(
+        endpoint=str(snapshot["cdp_endpoint"]),
+        browser=str(snapshot.get("browser_name") or "chrome"),
+        instance_name=snapshot.get("instance_name"),
+        profile_name=snapshot.get("profile_name"),
+        browser_pid=snapshot.get("browser_pid"),
+        launched_debug_browser=bool(snapshot.get("launched_debug_browser")),
+        init_script_paths=snapshot.get("init_script_paths"),
+        grant_permissions=snapshot.get("granted_permissions"),
+    )
+    session_id = attached["session_id"]
+    _session, resolved_page_id, page = get_playwright_page(session_id, page_id=attached.get("page_id") or page_id)
+    result = _extract_from_page(
+        target=target,
+        session_id=session_id,
+        page_id=resolved_page_id,
+        page=page,
+        safe_limit=safe_limit,
+        wait_ms=wait_ms,
+        poll_ms=poll_ms,
+        automation="cdp",
+    )
+    result["cdp_reattached"] = True
+    result["original_session_id"] = original_session_id
+    return result
 
 
 def social_search(

@@ -1002,6 +1002,65 @@ class TestSocialMediaReadOnly:
         assert page.limit == 7
         assert "querySelectorAll('article')" in page.script
 
+    def test_social_extract_waits_until_dom_items_are_rendered(self):
+        """Social extraction should not conclude zero items before SPA content renders."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakePage:
+            url = "https://x.com/search?q=codex"
+
+            def __init__(self):
+                self.calls = 0
+
+            def evaluate(self, _script, _limit):
+                self.calls += 1
+                if self.calls < 3:
+                    return []
+                return [{"platform": "x", "text": "Delayed Codex post", "url": "https://x.com/a/status/1"}]
+
+        page = FakePage()
+        with patch.object(sm, "get_playwright_page", return_value=({"session_id": "s1"}, "p1", page)):
+            result = sm.social_extract(platform="x", session_id="s1", wait_ms=100, poll_ms=1)
+
+        assert result["ok"] is True
+        assert result["item_count"] == 1
+        assert result["items"][0]["text"] == "Delayed Codex post"
+        assert result["extract_attempts"] == 3
+        assert page.calls == 3
+
+    def test_social_extract_reattaches_cdp_when_session_thread_is_stale(self):
+        """CDP extraction should recover when a previous MCP call stored a dead Playwright thread."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakePage:
+            url = "https://x.com/search?q=codex"
+
+            def evaluate(self, _script, _limit):
+                return [{"platform": "x", "text": "Reattached Codex post", "url": "https://x.com/a/status/2"}]
+
+        page = FakePage()
+        stale_error = RuntimeError("cannot switch to a different thread (which happens to have exited)")
+        snapshot = {
+            "cdp_endpoint": "http://127.0.0.1:9333",
+            "browser_name": "chrome",
+            "profile_name": "agent-social-x-cdp",
+            "instance_name": "agent-social-x-cdp",
+            "init_script_paths": [],
+            "granted_permissions": [],
+        }
+        with patch.object(sm, "_playwright_session_snapshot", return_value=snapshot):
+            with patch.object(sm, "get_playwright_page", side_effect=[stale_error, ({"cdp_endpoint": snapshot["cdp_endpoint"]}, "p2", page)]):
+                with patch.object(sm._bs, "browser_attach_cdp", return_value={"session_id": "s2", "page_id": "p2"}) as attach:
+                    result = sm.social_extract(platform="x", session_id="s1", page_id="p1", wait_ms=0)
+
+        assert result["ok"] is True
+        assert result["automation"] == "cdp"
+        assert result["session_id"] == "s2"
+        assert result["original_session_id"] == "s1"
+        assert result["cdp_reattached"] is True
+        assert result["items"][0]["text"] == "Reattached Codex post"
+        assert attach.call_args.kwargs["endpoint"] == "http://127.0.0.1:9333"
+
     def test_social_search_starts_agent_browser_then_extracts_dom(self):
         """Search should orchestrate agent_browser.start then DOM extraction."""
         from desktop_mcp.tools import social_media as sm
