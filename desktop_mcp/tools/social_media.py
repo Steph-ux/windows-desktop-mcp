@@ -214,7 +214,7 @@ class _CdpSession:
             import websocket
         except ImportError as exc:
             raise RuntimeError("websocket-client is required for direct CDP social extraction.") from exc
-        self._ws = websocket.create_connection(self.ws_url, timeout=self.timeout)
+        self._ws = websocket.create_connection(self.ws_url, timeout=self.timeout, suppress_origin=True)
         return self
 
     def __exit__(self, exc_type, exc, tb):

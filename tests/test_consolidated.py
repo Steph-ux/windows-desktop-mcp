@@ -1264,6 +1264,31 @@ class TestSocialMediaReadOnly:
         select_target.assert_called_once()
         open_cdp.assert_called_once_with("ws://target-1")
 
+    def test_cdp_session_suppresses_origin_header_for_chrome(self):
+        """Chrome rejects raw CDP WebSockets with a localhost Origin unless it is omitted."""
+        from desktop_mcp.tools import social_media as sm
+
+        called = {}
+
+        class FakeSocket:
+            def close(self):
+                called["closed"] = True
+
+        class FakeWebsocketModule:
+            def create_connection(self, ws_url, **kwargs):
+                called["ws_url"] = ws_url
+                called["kwargs"] = kwargs
+                return FakeSocket()
+
+        with patch.dict(sys.modules, {"websocket": FakeWebsocketModule()}):
+            with sm._CdpSession("ws://127.0.0.1:9333/devtools/page/1", timeout=3):
+                pass
+
+        assert called["ws_url"] == "ws://127.0.0.1:9333/devtools/page/1"
+        assert called["kwargs"]["timeout"] == 3
+        assert called["kwargs"]["suppress_origin"] is True
+        assert called["closed"] is True
+
     @pytest.mark.parametrize(
         "item,metric,expected",
         [
