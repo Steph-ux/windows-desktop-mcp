@@ -34,7 +34,7 @@ desktop-mcp-dashboard
 ```
 Then open `http://localhost:8080` in your browser.
 
-## Super-Tools (18)
+## Super-Tools (19)
 
 | Tool | Actions | Domain |
 |---|---|---|
@@ -46,7 +46,7 @@ Then open `http://localhost:8080` in your browser.
 | `browser_network` | cookies, intercept, HAR, storage… | Network |
 | `browser_debug` | traces, coverage, CDP, metrics… | Debug |
 | `agent_browser` | ensure_profile, start, status, stop | Dedicated agent browser |
-| `social_media` | platform_url, supported_platforms, search, extract | Read-only social DOM extraction |
+| `social_media` | platform_url, supported_platforms, search, extract, detail | Read-only social DOM extraction |
 | `desktop_interact` | click, keyboard, mouse, clipboard, macros | Desktop input |
 | `desktop_window` | list, focus, resize, UI inspect… | Windows |
 | `desktop_observe` | capture, OCR, smart OCR, video, monitors | Vision |
@@ -56,6 +56,7 @@ Then open `http://localhost:8080` in your browser.
 | `runtime` | health, events, status… | MCP runtime |
 | `workflow` | run, record, templates, plugins… | Automation |
 | `operator` | start, step, finish, session | Model-operated task sessions |
+| `goal` | create, status, list, history, step, pause, resume, complete, fail, clear | Persistent long-running goals |
 
 ## Key Features
 
@@ -64,6 +65,7 @@ Then open `http://localhost:8080` in your browser.
 - **Multi-Monitor** — capture and interact across all displays
 - **Workflow Engine** — chain actions, use variables, pre-built templates
 - **Operator Sessions** — log goals, steps, risk, evidence, and outcomes
+- **Persistent Goals** - store long-running objectives, policies, steps, evidence, status, and history across turns/restarts
 - **Dedicated Agent Browser** — isolated Playwright profiles for model-controlled browsing without using the host mouse, keyboard, or default browser
 - **Social Media Read-Only DOM Extraction** — X, YouTube, YouTube Studio, TikTok, and Instagram search/read scenarios through DOM/CDP instead of OCR where possible
 - **Strict Non-Interactive Mode** — blocks host mouse, keyboard, focus, and default-browser actions unless the host/user explicitly confirms
@@ -106,6 +108,22 @@ social_media -> search(platform="tiktok", query="codex", limit=25, keep_open=Fal
 ```
 
 These actions are designed for model planning: `social_media/search` and `social_media/extract` are `read` risk, non-host-interactive, and return structured items with `extraction_method="dom"`. When ranking is enabled, items include `metrics`, `rank_score`, and `rank_position` parsed from views, likes, replies/comments, reposts/shares, and bookmarks/saves where the platform exposes them in visible DOM text.
+
+## Persistent Goals
+
+Use `goal` when a model needs to keep a durable objective across multiple observe -> act -> verify cycles. Goals are persisted under `.pm-runtime/goals` and store objective, success criteria, constraints, risk policy, steps, evidence, status, and history.
+
+```python
+goal -> create(
+    objective="Ship the MCP release",
+    success_criteria=["tests pass", "docs updated", "repo pushed"],
+    risk_max="medium",
+)
+goal -> step(tool="runtime", target_action="status", rationale="Confirm runtime health")
+goal -> complete(outcome="Release is validated and pushed")
+```
+
+The MCP does not decide autonomously. The model chooses each next action, while `goal.step` enforces the goal risk policy and records the result from `workflow.act_verify`.
 
 ## Workflow Templates
 

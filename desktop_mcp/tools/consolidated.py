@@ -26,6 +26,7 @@ from . import operator as _op
 from . import smart_ocr as _socr
 from . import agent_browser as _ab
 from . import social_media as _sm
+from . import goals as _goals
 from .. import tools_ai as _ai
 from .. import tools_runtime as _trt
 from ..tool_policy import evaluate_host_interaction_guard
@@ -372,6 +373,21 @@ R["operator"] = (
     "step": _op.operator_step,
     "finish": _op.operator_finish,
     "session": _op.operator_session,
+})
+
+R["goal"] = (
+    "Persistent long-running goals for model-operated observe -> act -> verify loops.\n"
+    "Actions: create, status, list, history, step, pause, resume, complete, fail, clear", {
+    "create": _goals.goal_create,
+    "status": _goals.goal_status,
+    "list": _goals.goal_list,
+    "history": _goals.goal_history,
+    "step": _goals.goal_step,
+    "pause": _goals.goal_pause,
+    "resume": _goals.goal_resume,
+    "complete": _goals.goal_complete,
+    "fail": _goals.goal_fail,
+    "clear": _goals.goal_clear,
 })
 
 R["workflow"] = (

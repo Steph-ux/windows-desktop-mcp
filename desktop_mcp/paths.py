@@ -14,6 +14,7 @@ BROWSER_PRESET_ROOT = PROJECT_ROOT / ".pm-runtime" / "browser-presets"
 BROWSER_CAPTURE_ROOT = PROJECT_ROOT / ".pm-runtime" / "browser-captures"
 DOWNLOAD_ROOT = PROJECT_ROOT / ".pm-runtime" / "downloads"
 DESKTOP_WATCH_CAPTURE_ROOT = PROJECT_ROOT / ".pm-runtime" / "desktop-watch"
+GOAL_ROOT = PROJECT_ROOT / ".pm-runtime" / "goals"
 RUNTIME_LOG_DIR = PROJECT_ROOT / ".pm-runtime" / "logs"
 RUNTIME_EVENT_LOG = RUNTIME_LOG_DIR / "desktop-mcp-events.jsonl"
 MCP_LOG_PATH = Path.home() / ".pm" / "desktop-mcp" / "mcp.log"
@@ -27,5 +28,6 @@ def ensure_runtime_dirs() -> None:
     BROWSER_CAPTURE_ROOT.mkdir(parents=True, exist_ok=True)
     DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     DESKTOP_WATCH_CAPTURE_ROOT.mkdir(parents=True, exist_ok=True)
+    GOAL_ROOT.mkdir(parents=True, exist_ok=True)
     RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
     MCP_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)

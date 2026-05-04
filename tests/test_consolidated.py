@@ -1931,6 +1931,139 @@ class TestSocialMediaReadOnly:
         assert "detail" not in result["items"][2]
 
 
+class TestGoalRunner:
+    """Test persistent long-running goals for model-operated workflows."""
+
+    def test_goal_manifest_exposes_model_friendly_actions_and_risk(self):
+        """The manifest should expose persistent goal actions for model planning."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        manifest = runtime_tool_manifest(tool="goal")
+
+        assert manifest["ok"] is True
+        actions = manifest["tools"]["goal"]["actions"]
+        assert {"create", "status", "list", "history", "step", "pause", "resume", "complete", "fail", "clear"}.issubset(actions)
+        assert actions["status"]["risk"] == "read"
+        assert actions["history"]["risk"] == "read"
+        assert actions["step"]["risk"] == "medium"
+        assert "success_criteria" in [param["name"] for param in actions["create"]["parameters"]]
+        assert "risk_max" in [param["name"] for param in actions["create"]["parameters"]]
+
+    def test_goal_create_persists_active_goal_with_initial_observation(self, tmp_path):
+        """Creating a goal should persist state and make it the active goal."""
+        from desktop_mcp.tools import goals
+
+        with patch.object(goals, "GOAL_ROOT", tmp_path):
+            with patch.object(goals, "ACTIVE_GOAL_FILE", tmp_path / "active.json"):
+                with patch.object(goals, "workflow_observe", return_value={"ok": True, "scope": "desktop", "observation": {"active": "Codex"}}):
+                    created = goals.goal_create(
+                        objective="Ship production MCP",
+                        success_criteria=["tests pass", "docs updated"],
+                        constraints=["read-only social actions"],
+                        risk_max="medium",
+                        goal_id="prod-goal",
+                    )
+                    status = goals.goal_status()
+
+        assert created["ok"] is True
+        assert created["goal_id"] == "prod-goal"
+        assert status["ok"] is True
+        assert status["goal"]["objective"] == "Ship production MCP"
+        assert status["goal"]["success_criteria"] == ["tests pass", "docs updated"]
+        assert status["goal"]["policy"]["risk_max"] == "medium"
+        assert status["summary"]["step_count"] == 0
+        assert (tmp_path / "prod-goal.json").exists()
+
+    def test_goal_step_runs_workflow_act_verify_and_records_evidence(self, tmp_path):
+        """A goal step should run through workflow.act_verify and append structured proof."""
+        from desktop_mcp.tools import goals
+
+        with patch.object(goals, "GOAL_ROOT", tmp_path):
+            with patch.object(goals, "ACTIVE_GOAL_FILE", tmp_path / "active.json"):
+                with patch.object(goals, "workflow_observe", return_value={"ok": True, "scope": "desktop"}):
+                    goals.goal_create(
+                        objective="Inspect runtime",
+                        allowed_tools=["runtime"],
+                        goal_id="inspect-runtime",
+                        observe=False,
+                    )
+                with patch.object(goals, "workflow_act_verify", return_value={
+                    "ok": True,
+                    "tool": "runtime",
+                    "action": "status",
+                    "risk": "read",
+                    "before": {"ok": True},
+                    "result": {"ok": True, "status": "running"},
+                    "verification": {"ok": True, "checks": []},
+                    "after": {"ok": True},
+                }) as act:
+                    result = goals.goal_step(
+                        tool="runtime",
+                        target_action="status",
+                        kwargs={},
+                        rationale="Confirm MCP is running",
+                    )
+                    status = goals.goal_status(goal_id="inspect-runtime", include_history=True)
+
+        assert result["ok"] is True
+        assert result["status"] == "active"
+        assert result["step"]["risk"] == "read"
+        assert result["step"]["evidence"]["result"]["status"] == "running"
+        assert status["summary"]["step_count"] == 1
+        assert status["goal"]["history"][-1]["type"] == "step"
+        act.assert_called_once()
+        assert act.call_args.kwargs["tool"] == "runtime"
+        assert act.call_args.kwargs["target_action"] == "status"
+        assert act.call_args.kwargs["allowed_tools"] == ["runtime"]
+
+    def test_goal_step_blocks_actions_above_goal_risk_max(self, tmp_path):
+        """Goal policy should block risky actions before workflow execution."""
+        from desktop_mcp.tools import goals
+
+        with patch.object(goals, "GOAL_ROOT", tmp_path):
+            with patch.object(goals, "ACTIVE_GOAL_FILE", tmp_path / "active.json"):
+                goals.goal_create(
+                    objective="Stay safe",
+                    risk_max="medium",
+                    goal_id="safe-goal",
+                    observe=False,
+                )
+                with patch.object(goals, "workflow_act_verify") as act:
+                    result = goals.goal_step(
+                        tool="system_ops",
+                        target_action="run",
+                        kwargs={"command": ["cmd", "/c", "echo", "hi"]},
+                        rationale="Should be blocked by risk_max",
+                    )
+                    history = goals.goal_history(goal_id="safe-goal")
+
+        assert result["ok"] is False
+        assert result["status"] == "blocked"
+        assert result["step"]["blocked"] is True
+        assert result["step"]["phase"] == "goal_policy"
+        assert "exceeds goal risk_max" in result["action_result"]["reason"]
+        assert history["summary"]["blocked_steps"] == 1
+        act.assert_not_called()
+
+    def test_goal_complete_marks_goal_done_and_clears_active_pointer(self, tmp_path):
+        """Completing a goal should store final observation and clear active status."""
+        from desktop_mcp.tools import goals
+
+        with patch.object(goals, "GOAL_ROOT", tmp_path):
+            with patch.object(goals, "ACTIVE_GOAL_FILE", tmp_path / "active.json"):
+                goals.goal_create(objective="Finish docs", goal_id="finish-docs", observe=False)
+                with patch.object(goals, "workflow_observe", return_value={"ok": True, "scope": "desktop", "observation": "final"}):
+                    completed = goals.goal_complete(goal_id="finish-docs", outcome="Docs complete")
+                status = goals.goal_status(goal_id="finish-docs", include_observation=True)
+                listed = goals.goal_list()
+
+        assert completed["ok"] is True
+        assert completed["summary"]["status"] == "complete"
+        assert status["goal"]["status"] == "complete"
+        assert status["goal"]["final_observation"]["observation"] == "final"
+        assert listed["active_goal_id"] == ""
+
+
 class TestVideoModule:
     """Test video recording module."""
 
