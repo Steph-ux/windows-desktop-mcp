@@ -1001,6 +1001,8 @@ class TestSocialMediaReadOnly:
         assert result["item_count"] == 1
         assert page.limit == 7
         assert "querySelectorAll('article')" in page.script
+        assert ".textContent" in page.script
+        assert ".map(clean)" not in page.script
 
     def test_social_extract_waits_until_dom_items_are_rendered(self):
         """Social extraction should not conclude zero items before SPA content renders."""

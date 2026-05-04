@@ -33,7 +33,9 @@ _X_EXTRACTOR = r"""
     const hrefs = links(article);
     const statusUrl = hrefs.find((href) => /\/status\/\d+/.test(href)) || null;
     const authorUrl = hrefs.find((href) => /^https?:\/\/(x|twitter)\.com\/[^/?#]+\/?$/.test(href) && !/\/(home|search|notifications|messages|i)\b/.test(href)) || null;
-    const texts = Array.from(article.querySelectorAll('[data-testid="tweetText"], div[lang]')).map(clean).filter(Boolean);
+    const texts = Array.from(article.querySelectorAll('[data-testid="tweetText"], div[lang]'))
+      .map((node) => clean(node.innerText || node.textContent))
+      .filter(Boolean);
     const time = article.querySelector('time');
     const metricLabels = Array.from(article.querySelectorAll('[role="group"], [aria-label]'))
       .map((node) => clean(node.getAttribute('aria-label')))
@@ -44,7 +46,7 @@ _X_EXTRACTOR = r"""
       text: texts.join('\n'),
       url: statusUrl,
       author_url: authorUrl,
-      time: time ? (time.getAttribute('datetime') || clean(time)) : null,
+      time: time ? (time.getAttribute('datetime') || clean(time.textContent)) : null,
       metrics_text: metricLabels.join(' | '),
       media_count: article.querySelectorAll('img, video').length,
       source: 'dom'
