@@ -774,6 +774,42 @@ class TestAgentBrowser:
             wait_until="domcontentloaded",
         )
 
+    def test_agent_browser_start_cdp_uses_debug_chrome_attach(self):
+        """CDP mode should launch real Chrome with remote debugging for login-sensitive sites."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x"}):
+            with patch.object(ab._bs, "browser_launch_and_attach", return_value={
+                "ok": True,
+                "session_id": "s1",
+                "page_id": "p1",
+                "url": "https://x.com/i/flow/login",
+                "profile_name": "agent-social-x",
+                "instance_name": "agent-social-x",
+                "cdp_endpoint": "http://127.0.0.1:9333",
+                "attached": True,
+                "launched_debug_browser": True,
+                "headless": False,
+            }) as launch:
+                result = ab.agent_browser_start(
+                    platform="x",
+                    url="https://x.com/i/flow/login",
+                    profile_name="agent-social-x",
+                    instance_name="agent-social-x",
+                    browser_engine="cdp",
+                    debug_port=9333,
+                )
+
+        assert result["ok"] is True
+        assert result["automation"] == "cdp"
+        assert result["browser_context"] == "agent_dedicated"
+        assert result["host_interactive"] is False
+        assert result["cdp_endpoint"] == "http://127.0.0.1:9333"
+        launch.assert_called_once()
+        assert launch.call_args.kwargs["profile_name"] == "agent-social-x"
+        assert launch.call_args.kwargs["instance_name"] == "agent-social-x"
+        assert launch.call_args.kwargs["port"] == 9333
+
     def test_agent_browser_manifest_is_not_host_interactive(self):
         """The manifest should expose agent browser actions without host UI confirmation."""
         from desktop_mcp.tools_runtime import runtime_tool_manifest
@@ -785,6 +821,7 @@ class TestAgentBrowser:
         assert start["host_interactive"] is False
         assert start["requires_host_confirmation"] is False
         assert "profile_name" in [param["name"] for param in start["parameters"]]
+        assert "browser_engine" in [param["name"] for param in start["parameters"]]
 
 
 class TestSocialMediaReadOnly:
@@ -869,6 +906,42 @@ class TestSocialMediaReadOnly:
         assert start.call_args.kwargs["url"] == "https://x.com/search?q=codex&src=typed_query&f=top"
         assert start.call_args.kwargs["headless"] is True
         extract.assert_called_once_with(platform="x", session_id="s1", page_id="p1", limit=3)
+
+    def test_social_search_can_request_cdp_agent_browser(self):
+        """Search should pass CDP mode through for login-sensitive social profiles."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "p1",
+            "browser_context": "agent_dedicated",
+            "automation": "cdp",
+            "host_interactive": False,
+            "profile_name": "agent-social-x-cdp",
+            "url": "https://x.com/search?q=codex&src=typed_query&f=top",
+        }) as start:
+            with patch.object(sm, "social_extract", return_value={
+                "ok": True,
+                "platform": "x",
+                "extraction_method": "dom",
+                "items": [],
+                "item_count": 0,
+            }):
+                result = sm.social_search(
+                    platform="x",
+                    query="codex",
+                    browser_engine="cdp",
+                    profile_name="agent-social-x-cdp",
+                    instance_name="agent-social-x-cdp",
+                    debug_port=9333,
+                )
+
+        assert result["ok"] is True
+        assert result["browser"]["automation"] == "cdp"
+        assert start.call_args.kwargs["browser_engine"] == "cdp"
+        assert start.call_args.kwargs["debug_port"] == 9333
+        assert start.call_args.kwargs["profile_name"] == "agent-social-x-cdp"
 
 
 class TestVideoModule:

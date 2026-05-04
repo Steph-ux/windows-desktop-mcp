@@ -85,6 +85,9 @@ def agent_browser_start(
     instance_name: str = "",
     name: str = "social",
     browser: str = "chrome",
+    browser_engine: str = "playwright",
+    debug_port: int = 9333,
+    startup_wait_ms: int = 4000,
     headless: bool = True,
     width: int | str = "auto",
     height: int | str = "auto",
@@ -106,6 +109,47 @@ def agent_browser_start(
     resolved_profile = profile["profile_name"]
     resolved_instance = _safe_name(instance_name) if instance_name else default_agent_instance_name(resolved_platform, name)
     target_url = url or _DEFAULT_PLATFORM_URLS.get(resolved_platform, "about:blank")
+    engine = (browser_engine or "playwright").strip().lower()
+    if engine not in {"playwright", "cdp"}:
+        raise ValueError("browser_engine must be 'playwright' or 'cdp'.")
+    if engine == "cdp":
+        started = _bs.browser_launch_and_attach(
+            browser=browser,
+            port=int(debug_port),
+            url=target_url,
+            profile_name=resolved_profile,
+            instance_name=resolved_instance,
+            width=width,
+            height=height,
+            startup_wait_ms=startup_wait_ms,
+            init_script_paths=init_script_paths,
+            grant_permissions=grant_permissions,
+        )
+        record_event(
+            "agent_browser_start",
+            profile_name=resolved_profile,
+            instance_name=resolved_instance,
+            platform=resolved_platform,
+            url=target_url,
+            browser_engine="cdp",
+            headless=False,
+        )
+        return {
+            **started,
+            "ok": bool(started.get("ok", True)),
+            "profile_name": resolved_profile,
+            "instance_name": resolved_instance,
+            "platform": resolved_platform,
+            "url": started.get("url") or target_url,
+            "navigated": True,
+            "browser_context": "agent_dedicated",
+            "automation": "cdp",
+            "browser_engine": "cdp",
+            "host_interactive": False,
+            "uses_host_mouse": False,
+            "uses_host_keyboard": False,
+        }
+
     startup_url = "about:blank" if target_url and target_url != "about:blank" else target_url
     started = _bs.browser_start_instance(
         instance_name=resolved_instance,
@@ -148,6 +192,7 @@ def agent_browser_start(
         "navigated": navigated,
         "browser_context": "agent_dedicated",
         "automation": "playwright",
+        "browser_engine": "playwright",
         "host_interactive": False,
         "uses_host_mouse": False,
         "uses_host_keyboard": False,
