@@ -1753,8 +1753,8 @@ class TestSocialMediaReadOnly:
             "browser_context": "agent_dedicated",
             "automation": "cdp",
             "host_interactive": False,
-            "profile_name": "agent-social-cdp",
-            "instance_name": "agent-social-cdp",
+            "profile_name": "agent-social-x-cdp",
+            "instance_name": "agent-social-x-cdp",
             "cdp_endpoint": "http://127.0.0.1:9333",
             "url": "https://www.youtube.com/results?search_query=codex",
         }) as start:
@@ -1772,8 +1772,8 @@ class TestSocialMediaReadOnly:
         assert result["ok"] is True
         assert result["automation"] == "cdp"
         assert start.call_args.kwargs["browser_engine"] == "cdp"
-        assert start.call_args.kwargs["profile_name"] == "agent-social-cdp"
-        assert start.call_args.kwargs["instance_name"] == "agent-social-cdp"
+        assert start.call_args.kwargs["profile_name"] == "agent-social-x-cdp"
+        assert start.call_args.kwargs["instance_name"] == "agent-social-x-cdp"
         assert start.call_args.kwargs["debug_port"] == 9333
         assert start.call_args.kwargs["new_tab_if_needed"] is True
 
