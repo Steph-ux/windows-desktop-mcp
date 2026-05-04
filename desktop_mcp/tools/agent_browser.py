@@ -113,18 +113,52 @@ def agent_browser_start(
     if engine not in {"playwright", "cdp"}:
         raise ValueError("browser_engine must be 'playwright' or 'cdp'.")
     if engine == "cdp":
-        started = _bs.browser_launch_and_attach(
-            browser=browser,
-            port=int(debug_port),
-            url=target_url,
-            profile_name=resolved_profile,
-            instance_name=resolved_instance,
-            width=width,
-            height=height,
-            startup_wait_ms=startup_wait_ms,
-            init_script_paths=init_script_paths,
-            grant_permissions=grant_permissions,
-        )
+        cdp_port = int(debug_port)
+        started: dict[str, Any] | None = None
+        cdp_reattached = False
+        endpoints = {"count": 0, "endpoints": []}
+        try:
+            endpoints = _bs.browser_list_endpoints(ports=[cdp_port])
+        except Exception:
+            endpoints = {"count": 0, "endpoints": []}
+        if int(endpoints.get("count") or 0) > 0:
+            try:
+                started = _bs.browser_attach_existing(
+                    browser=browser,
+                    instance_name=resolved_instance,
+                    profile_name=resolved_profile,
+                    ports=[cdp_port],
+                    width=width,
+                    height=height,
+                    init_script_paths=init_script_paths,
+                    grant_permissions=grant_permissions,
+                )
+                cdp_reattached = True
+            except Exception:
+                started = None
+        if started is None:
+            started = _bs.browser_launch_and_attach(
+                browser=browser,
+                port=cdp_port,
+                url=target_url,
+                profile_name=resolved_profile,
+                instance_name=resolved_instance,
+                width=width,
+                height=height,
+                startup_wait_ms=startup_wait_ms,
+                init_script_paths=init_script_paths,
+                grant_permissions=grant_permissions,
+            )
+        navigated = False
+        if cdp_reattached and target_url and started.get("session_id") and started.get("url") != target_url:
+            navigation = _bs.browser_navigate(
+                session_id=started["session_id"],
+                page_id=started.get("page_id"),
+                url=target_url,
+                wait_until=wait_until,
+            )
+            started.update({key: value for key, value in navigation.items() if value is not None})
+            navigated = True
         record_event(
             "agent_browser_start",
             profile_name=resolved_profile,
@@ -132,6 +166,7 @@ def agent_browser_start(
             platform=resolved_platform,
             url=target_url,
             browser_engine="cdp",
+            cdp_reattached=cdp_reattached,
             headless=False,
         )
         return {
@@ -141,10 +176,11 @@ def agent_browser_start(
             "instance_name": resolved_instance,
             "platform": resolved_platform,
             "url": started.get("url") or target_url,
-            "navigated": True,
+            "navigated": navigated or not cdp_reattached,
             "browser_context": "agent_dedicated",
             "automation": "cdp",
             "browser_engine": "cdp",
+            "cdp_reattached": cdp_reattached,
             "host_interactive": False,
             "uses_host_mouse": False,
             "uses_host_keyboard": False,
