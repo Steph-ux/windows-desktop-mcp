@@ -71,6 +71,40 @@ def _navigate_started_browser(started: dict[str, Any], target_url: str, wait_unt
         return started, started.get("url") == target_url, navigation_error
 
 
+def _attach_known_cdp_instance(
+    browser: str,
+    resolved_instance: str,
+    resolved_profile: str,
+    width: int | str,
+    height: int | str,
+    init_script_paths: list[str] | None,
+    grant_permissions: list[str] | None,
+) -> dict[str, Any] | None:
+    try:
+        instance = _bs.browser_get_instance(resolved_instance)
+    except Exception:
+        instance = None
+    if not isinstance(instance, dict):
+        return None
+    endpoint = str(instance.get("cdp_endpoint") or instance.get("manifest", {}).get("cdp_endpoint") or "").strip()
+    if not endpoint:
+        return None
+    browser_pid = instance.get("browser_pid") or instance.get("manifest", {}).get("browser_pid")
+    launched_debug_browser = bool(instance.get("launched_debug_browser") or instance.get("manifest", {}).get("launched_debug_browser"))
+    return _bs.browser_attach_cdp(
+        endpoint=endpoint,
+        browser=browser,
+        instance_name=resolved_instance,
+        profile_name=resolved_profile,
+        browser_pid=browser_pid,
+        launched_debug_browser=launched_debug_browser,
+        width=width,
+        height=height,
+        init_script_paths=init_script_paths,
+        grant_permissions=grant_permissions,
+    )
+
+
 def agent_browser_ensure_profile(
     profile_name: str = "",
     platform: str = "",
@@ -145,26 +179,40 @@ def agent_browser_start(
         cdp_port = int(debug_port)
         started: dict[str, Any] | None = None
         cdp_reattached = False
-        endpoints = {"count": 0, "endpoints": []}
         try:
-            endpoints = _bs.browser_list_endpoints(ports=[cdp_port])
+            started = _attach_known_cdp_instance(
+                browser=browser,
+                resolved_instance=resolved_instance,
+                resolved_profile=resolved_profile,
+                width=width,
+                height=height,
+                init_script_paths=init_script_paths,
+                grant_permissions=grant_permissions,
+            )
+            cdp_reattached = started is not None
         except Exception:
-            endpoints = {"count": 0, "endpoints": []}
-        if int(endpoints.get("count") or 0) > 0:
+            started = None
+        endpoints = {"count": 0, "endpoints": []}
+        if started is None:
             try:
-                started = _bs.browser_attach_existing(
-                    browser=browser,
-                    instance_name=resolved_instance,
-                    profile_name=resolved_profile,
-                    ports=[cdp_port],
-                    width=width,
-                    height=height,
-                    init_script_paths=init_script_paths,
-                    grant_permissions=grant_permissions,
-                )
-                cdp_reattached = True
+                endpoints = _bs.browser_list_endpoints(ports=[cdp_port])
             except Exception:
-                started = None
+                endpoints = {"count": 0, "endpoints": []}
+            if int(endpoints.get("count") or 0) > 0:
+                try:
+                    started = _bs.browser_attach_existing(
+                        browser=browser,
+                        instance_name=resolved_instance,
+                        profile_name=resolved_profile,
+                        ports=[cdp_port],
+                        width=width,
+                        height=height,
+                        init_script_paths=init_script_paths,
+                        grant_permissions=grant_permissions,
+                    )
+                    cdp_reattached = True
+                except Exception:
+                    started = None
         if started is None:
             started = _bs.browser_launch_and_attach(
                 browser=browser,

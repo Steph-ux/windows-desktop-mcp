@@ -818,33 +818,34 @@ class TestAgentBrowser:
 
         target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
         with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x-cdp"}):
-            with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 0, "endpoints": []}):
-                with patch.object(ab._bs, "browser_launch_and_attach", return_value={
-                    "ok": True,
-                    "session_id": "s1",
-                    "page_id": "p1",
-                    "url": "https://getadblock.com/fr/installed/",
-                    "profile_name": "agent-social-x-cdp",
-                    "instance_name": "agent-social-x-cdp",
-                    "cdp_endpoint": "http://127.0.0.1:9333",
-                    "attached": True,
-                    "launched_debug_browser": True,
-                    "headless": False,
-                }):
-                    with patch.object(ab._bs, "browser_navigate", return_value={
+            with patch.object(ab._bs, "browser_get_instance", side_effect=ValueError("missing")):
+                with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 0, "endpoints": []}):
+                    with patch.object(ab._bs, "browser_launch_and_attach", return_value={
+                        "ok": True,
                         "session_id": "s1",
                         "page_id": "p1",
-                        "url": target_url,
-                        "title": "Search / X",
-                    }) as navigate:
-                        result = ab.agent_browser_start(
-                            platform="x",
-                            url=target_url,
-                            profile_name="agent-social-x-cdp",
-                            instance_name="agent-social-x-cdp",
-                            browser_engine="cdp",
-                            debug_port=9333,
-                        )
+                        "url": "https://getadblock.com/fr/installed/",
+                        "profile_name": "agent-social-x-cdp",
+                        "instance_name": "agent-social-x-cdp",
+                        "cdp_endpoint": "http://127.0.0.1:9333",
+                        "attached": True,
+                        "launched_debug_browser": True,
+                        "headless": False,
+                    }):
+                        with patch.object(ab._bs, "browser_navigate", return_value={
+                            "session_id": "s1",
+                            "page_id": "p1",
+                            "url": target_url,
+                            "title": "Search / X",
+                        }) as navigate:
+                            result = ab.agent_browser_start(
+                                platform="x",
+                                url=target_url,
+                                profile_name="agent-social-x-cdp",
+                                instance_name="agent-social-x-cdp",
+                                browser_engine="cdp",
+                                debug_port=9333,
+                            )
 
         assert result["ok"] is True
         assert result["url"] == target_url
@@ -863,34 +864,35 @@ class TestAgentBrowser:
         target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
         endpoint = {"endpoint": "http://127.0.0.1:9333", "port": 9333, "targets": []}
         with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x-cdp"}):
-            with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 1, "endpoints": [endpoint]}):
-                with patch.object(ab._bs, "browser_attach_existing", return_value={
-                    "ok": True,
-                    "session_id": "s1",
-                    "page_id": "p1",
-                    "url": "https://x.com/home",
-                    "profile_name": "agent-social-x-cdp",
-                    "instance_name": "agent-social-x-cdp",
-                    "cdp_endpoint": "http://127.0.0.1:9333",
-                    "attached": True,
-                    "launched_debug_browser": True,
-                    "headless": False,
-                }) as attach:
-                    with patch.object(ab._bs, "browser_launch_and_attach") as launch:
-                        with patch.object(ab._bs, "browser_navigate", return_value={
-                            "session_id": "s1",
-                            "page_id": "p1",
-                            "url": target_url,
-                            "title": "Search / X",
-                        }) as navigate:
-                            result = ab.agent_browser_start(
-                                platform="x",
-                                url=target_url,
-                                profile_name="agent-social-x-cdp",
-                                instance_name="agent-social-x-cdp",
-                                browser_engine="cdp",
-                                debug_port=9333,
-                            )
+            with patch.object(ab._bs, "browser_get_instance", side_effect=ValueError("missing")):
+                with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 1, "endpoints": [endpoint]}):
+                    with patch.object(ab._bs, "browser_attach_existing", return_value={
+                        "ok": True,
+                        "session_id": "s1",
+                        "page_id": "p1",
+                        "url": "https://x.com/home",
+                        "profile_name": "agent-social-x-cdp",
+                        "instance_name": "agent-social-x-cdp",
+                        "cdp_endpoint": "http://127.0.0.1:9333",
+                        "attached": True,
+                        "launched_debug_browser": True,
+                        "headless": False,
+                    }) as attach:
+                        with patch.object(ab._bs, "browser_launch_and_attach") as launch:
+                            with patch.object(ab._bs, "browser_navigate", return_value={
+                                "session_id": "s1",
+                                "page_id": "p1",
+                                "url": target_url,
+                                "title": "Search / X",
+                            }) as navigate:
+                                result = ab.agent_browser_start(
+                                    platform="x",
+                                    url=target_url,
+                                    profile_name="agent-social-x-cdp",
+                                    instance_name="agent-social-x-cdp",
+                                    browser_engine="cdp",
+                                    debug_port=9333,
+                                )
 
         assert result["ok"] is True
         assert result["automation"] == "cdp"
@@ -946,6 +948,48 @@ class TestAgentBrowser:
         assert result["navigated"] is True
         assert result["navigation_timed_out"] is True
         assert "Timeout" in result["navigation_error"]
+
+    def test_agent_browser_start_cdp_uses_known_instance_endpoint_before_scanning(self):
+        """Warm agent instances should reattach through their known manifest endpoint before rescanning ports."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x-cdp"}):
+            with patch.object(ab._bs, "browser_get_instance", return_value={
+                "running": True,
+                "browser_pid": 6772,
+                "launched_debug_browser": True,
+                "cdp_endpoint": "http://127.0.0.1:9333",
+                "manifest": {"cdp_endpoint": "http://127.0.0.1:9333", "browser_pid": 6772, "launched_debug_browser": True},
+            }):
+                with patch.object(ab._bs, "browser_attach_cdp", return_value={
+                    "ok": True,
+                    "session_id": "s1",
+                    "page_id": "p1",
+                    "url": target_url,
+                    "profile_name": "agent-social-x-cdp",
+                    "instance_name": "agent-social-x-cdp",
+                    "cdp_endpoint": "http://127.0.0.1:9333",
+                    "attached": True,
+                    "headless": False,
+                }) as attach_cdp:
+                    with patch.object(ab._bs, "browser_list_endpoints") as list_endpoints:
+                        with patch.object(ab._bs, "browser_launch_and_attach") as launch:
+                            result = ab.agent_browser_start(
+                                platform="x",
+                                url=target_url,
+                                profile_name="agent-social-x-cdp",
+                                instance_name="agent-social-x-cdp",
+                                browser_engine="cdp",
+                                debug_port=9333,
+                            )
+
+        assert result["ok"] is True
+        assert result["automation"] == "cdp"
+        assert result["url"] == target_url
+        attach_cdp.assert_called_once()
+        list_endpoints.assert_not_called()
+        launch.assert_not_called()
 
     def test_agent_browser_start_cdp_launches_when_endpoint_attach_fails(self):
         """CDP mode should fall back to launching Chrome when an advertised endpoint is stale."""
