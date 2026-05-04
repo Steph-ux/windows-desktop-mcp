@@ -1333,6 +1333,9 @@ class TestSocialMediaReadOnly:
         from desktop_mcp.tools import social_media as sm
 
         class FakeCdp:
+            def __init__(self):
+                self.detail_calls = 0
+
             def __enter__(self):
                 return self
 
@@ -1342,6 +1345,18 @@ class TestSocialMediaReadOnly:
             def evaluate(self, expression):
                 if "document.readyState" in expression:
                     return {"href": "https://x.com/NickSpisak_/status/2040448463540830705", "title": "How to Build Your Second Brain", "ready": "complete"}
+                self.detail_calls += 1
+                if self.detail_calls == 1:
+                    return {
+                        "platform": "x",
+                        "url": "https://x.com/NickSpisak_/status/2040448463540830705",
+                        "title": "X",
+                        "text": "Pour voir les raccourcis clavier, appuyez sur le point d'interrogation. Voir les raccourcis clavier",
+                        "full_text": "Pour voir les raccourcis clavier, appuyez sur le point d'interrogation. Voir les raccourcis clavier",
+                        "metrics_text": "Chargement",
+                        "links": [],
+                        "media": [],
+                    }
                 return {
                     "platform": "x",
                     "url": "https://x.com/NickSpisak_/status/2040448463540830705",
@@ -1353,8 +1368,9 @@ class TestSocialMediaReadOnly:
                     "metrics_text": "101 replies, 762 reposts, 5121 likes, 16138 bookmarks, 2395866 views",
                     "links": ["https://x.com/NickSpisak_"],
                     "media": [],
-                }
+                    }
 
+        fake_cdp = FakeCdp()
         with patch.object(sm, "cdp_navigate", return_value={
             "ok": True,
             "url": "https://x.com/NickSpisak_/status/2040448463540830705",
@@ -1364,7 +1380,7 @@ class TestSocialMediaReadOnly:
             "navigated": True,
         }):
             with patch.object(sm, "_select_cdp_page_target", return_value={"id": "target-1", "url": "https://x.com/NickSpisak_/status/2040448463540830705", "webSocketDebuggerUrl": "ws://target-1"}):
-                with patch.object(sm, "_open_cdp_session", return_value=FakeCdp()):
+                with patch.object(sm, "_open_cdp_session", return_value=fake_cdp):
                     result = sm._extract_detail_from_cdp_endpoint(
                         target="x",
                         session_id="s1",
@@ -1378,6 +1394,7 @@ class TestSocialMediaReadOnly:
         assert result["text"].startswith("Nick Spisak How to Build Your Second Brain")
         assert result["full_text"].startswith("Nick Spisak How to Build Your Second Brain")
         assert result["metrics"]["bookmarks"] == 16138
+        assert fake_cdp.detail_calls == 2
 
     @pytest.mark.parametrize("platform", ["youtube", "tiktok", "instagram"])
     def test_social_detail_normalizes_cross_platform_dom_payloads(self, platform):

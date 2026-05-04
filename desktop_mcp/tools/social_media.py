@@ -690,7 +690,7 @@ def _extract_detail_from_cdp_endpoint(
             page_info = _cdp_page_info(cdp)
             raw = cdp.evaluate(_js_call(script))
             raw_detail = raw if isinstance(raw, dict) else {}
-            if raw_detail.get("text") or raw_detail.get("full_text") or time.monotonic() >= deadline:
+            if _detail_is_meaningful(raw_detail, target) or time.monotonic() >= deadline:
                 break
             sleep_seconds = min(poll_seconds, max(deadline - time.monotonic(), 0))
             if sleep_seconds <= 0:
@@ -726,6 +726,30 @@ def _extract_detail_from_cdp_endpoint(
         "extract_attempts": attempts,
         "extract_waited_ms": int((time.monotonic() - started_at) * 1000),
     }
+
+
+def _detail_is_meaningful(raw_detail: dict[str, Any], platform: str) -> bool:
+    if not isinstance(raw_detail, dict):
+        return False
+    text = str(raw_detail.get("full_text") or raw_detail.get("text") or "").strip()
+    metrics_text = str(raw_detail.get("metrics_text") or "").strip().lower()
+    links = raw_detail.get("links")
+    has_links = isinstance(links, list) and len(links) > 0
+    if platform == "x":
+        loading_markers = {
+            "chargement",
+            "loading",
+            "pour voir les raccourcis clavier, appuyez sur le point d'interrogation. voir les raccourcis clavier",
+        }
+        if metrics_text in loading_markers or text.lower() in loading_markers:
+            return False
+        return bool(raw_detail.get("author_url") or has_links or _extract_metrics({"metrics_text": metrics_text})["views"] > 0)
+    if platform == "youtube":
+        return bool(raw_detail.get("title") or raw_detail.get("author") or text)
+    if platform in {"tiktok", "instagram"}:
+        media = raw_detail.get("media")
+        return bool(raw_detail.get("author_url") or text or (isinstance(media, list) and media))
+    return bool(text or has_links)
 
 
 def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: str) -> dict[str, Any]:
