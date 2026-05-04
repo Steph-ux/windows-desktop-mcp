@@ -150,7 +150,7 @@ def agent_browser_start(
                 grant_permissions=grant_permissions,
             )
         navigated = False
-        if cdp_reattached and target_url and started.get("session_id") and started.get("url") != target_url:
+        if target_url and started.get("session_id") and started.get("url") != target_url:
             navigation = _bs.browser_navigate(
                 session_id=started["session_id"],
                 page_id=started.get("page_id"),
@@ -176,7 +176,7 @@ def agent_browser_start(
             "instance_name": resolved_instance,
             "platform": resolved_platform,
             "url": started.get("url") or target_url,
-            "navigated": navigated or not cdp_reattached,
+            "navigated": navigated or started.get("url") == target_url,
             "browser_context": "agent_dedicated",
             "automation": "cdp",
             "browser_engine": "cdp",

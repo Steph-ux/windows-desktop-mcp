@@ -272,7 +272,7 @@ def social_search(
         "url": extracted.get("url") or started.get("url") or url_info["url"],
         "browser": started,
         "browser_context": "agent_dedicated",
-        "automation": "playwright",
+        "automation": started.get("automation") or extracted.get("automation") or "playwright",
         "host_interactive": False,
         "read_only": True,
     }

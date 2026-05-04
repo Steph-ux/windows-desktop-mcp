@@ -778,13 +778,14 @@ class TestAgentBrowser:
         """CDP mode should launch real Chrome with remote debugging for login-sensitive sites."""
         from desktop_mcp.tools import agent_browser as ab
 
+        target_url = "https://x.com/i/flow/login"
         with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x"}):
             with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 0, "endpoints": []}):
                 with patch.object(ab._bs, "browser_launch_and_attach", return_value={
                     "ok": True,
                     "session_id": "s1",
                     "page_id": "p1",
-                    "url": "https://x.com/i/flow/login",
+                    "url": target_url,
                     "profile_name": "agent-social-x",
                     "instance_name": "agent-social-x",
                     "cdp_endpoint": "http://127.0.0.1:9333",
@@ -794,7 +795,7 @@ class TestAgentBrowser:
                 }) as launch:
                     result = ab.agent_browser_start(
                         platform="x",
-                        url="https://x.com/i/flow/login",
+                        url=target_url,
                         profile_name="agent-social-x",
                         instance_name="agent-social-x",
                         browser_engine="cdp",
@@ -810,6 +811,50 @@ class TestAgentBrowser:
         assert launch.call_args.kwargs["profile_name"] == "agent-social-x"
         assert launch.call_args.kwargs["instance_name"] == "agent-social-x"
         assert launch.call_args.kwargs["port"] == 9333
+
+    def test_agent_browser_start_cdp_launch_navigates_when_attached_to_wrong_tab(self):
+        """CDP launch should force target navigation if attach selected an existing profile tab."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x-cdp"}):
+            with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 0, "endpoints": []}):
+                with patch.object(ab._bs, "browser_launch_and_attach", return_value={
+                    "ok": True,
+                    "session_id": "s1",
+                    "page_id": "p1",
+                    "url": "https://getadblock.com/fr/installed/",
+                    "profile_name": "agent-social-x-cdp",
+                    "instance_name": "agent-social-x-cdp",
+                    "cdp_endpoint": "http://127.0.0.1:9333",
+                    "attached": True,
+                    "launched_debug_browser": True,
+                    "headless": False,
+                }):
+                    with patch.object(ab._bs, "browser_navigate", return_value={
+                        "session_id": "s1",
+                        "page_id": "p1",
+                        "url": target_url,
+                        "title": "Search / X",
+                    }) as navigate:
+                        result = ab.agent_browser_start(
+                            platform="x",
+                            url=target_url,
+                            profile_name="agent-social-x-cdp",
+                            instance_name="agent-social-x-cdp",
+                            browser_engine="cdp",
+                            debug_port=9333,
+                        )
+
+        assert result["ok"] is True
+        assert result["url"] == target_url
+        assert result["navigated"] is True
+        navigate.assert_called_once_with(
+            session_id="s1",
+            page_id="p1",
+            url=target_url,
+            wait_until="domcontentloaded",
+        )
 
     def test_agent_browser_start_cdp_attaches_existing_endpoint_and_navigates(self):
         """CDP mode should re-attach to an already open Chrome and navigate in the same call."""
@@ -1022,6 +1067,7 @@ class TestSocialMediaReadOnly:
 
         assert result["ok"] is True
         assert result["browser"]["automation"] == "cdp"
+        assert result["automation"] == "cdp"
         assert start.call_args.kwargs["browser_engine"] == "cdp"
         assert start.call_args.kwargs["debug_port"] == 9333
         assert start.call_args.kwargs["profile_name"] == "agent-social-x-cdp"
