@@ -75,6 +75,14 @@ _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("browser_content", "frame_eval"): "high",
     ("browser_content", "frame_click"): "medium",
     ("browser_content", "frame_fill"): "medium",
+    ("agent_browser", "ensure_profile"): "medium",
+    ("agent_browser", "start"): "medium",
+    ("agent_browser", "status"): "read",
+    ("agent_browser", "stop"): "medium",
+    ("social_media", "platform_url"): "read",
+    ("social_media", "supported_platforms"): "read",
+    ("social_media", "search"): "read",
+    ("social_media", "extract"): "read",
     ("operator", "start"): "medium",
     ("operator", "step"): "medium",
     ("operator", "finish"): "medium",
@@ -118,6 +126,7 @@ _READ_TOOLS = {
     "desktop_monitor",
     "desktop_window",
     "runtime",
+    "social_media",
 }
 
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "windows-desktop-mcp"
 version = "0.2.0"
-description = "Windows desktop and browser control MCP server - 16 super-tools for automation, OCR, Playwright, video recording, and workflows."
+description = "Windows desktop and browser control MCP server - 18 super-tools for automation, OCR, Playwright, video recording, social DOM extraction, and workflows."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

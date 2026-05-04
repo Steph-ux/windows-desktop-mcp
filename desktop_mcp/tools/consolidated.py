@@ -1,4 +1,4 @@
-"""Dynamic consolidated MCP tool registration — 15 super-tools via action dispatch."""
+"""Dynamic consolidated MCP tool registration via action dispatch."""
 from __future__ import annotations
 import functools
 import inspect
@@ -24,6 +24,8 @@ from . import monitors as _mon
 from . import workflows as _wf
 from . import operator as _op
 from . import smart_ocr as _socr
+from . import agent_browser as _ab
+from . import social_media as _sm
 from .. import tools_ai as _ai
 from .. import tools_runtime as _trt
 from ..tool_policy import evaluate_host_interaction_guard
@@ -200,6 +202,24 @@ R["browser_debug"] = (
 })
 
 # ═══ DESKTOP (4) ════════════════════════════════════════════════════
+
+R["agent_browser"] = (
+    "Dedicated model-controlled browser profiles and instances that do not use host mouse/keyboard input.\n"
+    "Actions: ensure_profile, start, status, stop", {
+    "ensure_profile": _ab.agent_browser_ensure_profile,
+    "start": _ab.agent_browser_start,
+    "status": _ab.agent_browser_status,
+    "stop": _ab.agent_browser_stop,
+})
+
+R["social_media"] = (
+    "Read-only social media workflows using the dedicated agent browser and DOM extraction.\n"
+    "Actions: platform_url, supported_platforms, search, extract", {
+    "platform_url": _sm.social_platform_url,
+    "supported_platforms": _sm.social_supported_platforms,
+    "search": _sm.social_search,
+    "extract": _sm.social_extract,
+})
 
 R["desktop_interact"] = (
     "All desktop interaction: click, mouse, keyboard, clipboard, macros.\n"

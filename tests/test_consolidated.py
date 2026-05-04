@@ -423,8 +423,8 @@ class TestWorkflowEngine:
 class TestAgenticEvals:
     """Model-facing evals that prove manifest-driven planning works."""
 
-    def test_eval_social_search_uses_user_browser_and_operator_log(self):
-        """A social-search task should choose user_open and record evidence."""
+    def test_eval_social_search_uses_agent_browser_dom_and_operator_log(self):
+        """A social-search task should choose the dedicated agent browser and DOM extraction."""
         from desktop_mcp.tools import operator as op
 
         op._OPERATOR_SESSIONS.clear()
@@ -436,11 +436,17 @@ class TestAgenticEvals:
             )
         action_result = {
             "ok": True,
-            "tool": "browser_session",
-            "action": "user_open",
-            "risk": "medium",
+            "tool": "social_media",
+            "action": "search",
+            "risk": "read",
             "before": {"ok": True},
-            "result": {"ok": True, "browser_context": "user_default", "verified": True},
+            "result": {
+                "ok": True,
+                "browser_context": "agent_dedicated",
+                "extraction_method": "dom",
+                "host_interactive": False,
+                "items": [{"platform": "x", "text": "Codex post"}],
+            },
             "verification": {"ok": True, "checks": []},
             "after": {"ok": True},
         }
@@ -448,17 +454,43 @@ class TestAgenticEvals:
         with patch.object(op, "workflow_act_verify", return_value=action_result) as act_verify:
             result = op.operator_step(
                 session_id=started["session_id"],
-                tool="browser_session",
-                target_action="user_open",
-                kwargs={"url": "https://x.com/search?q=codex", "wait_title_contains": "Recherche / X"},
-                rationale="Use the logged-in browser profile for X.",
+                tool="social_media",
+                target_action="search",
+                kwargs={"platform": "x", "query": "codex", "limit": 5},
+                rationale="Use the isolated agent browser and read posts through the DOM.",
             )
 
         assert result["ok"] is True
-        assert result["step"]["tool"] == "browser_session"
-        assert result["step"]["action"] == "user_open"
-        assert result["step"]["evidence"]["result"]["browser_context"] == "user_default"
+        assert result["step"]["tool"] == "social_media"
+        assert result["step"]["action"] == "search"
+        assert result["step"]["risk"] == "read"
+        assert result["step"]["evidence"]["result"]["browser_context"] == "agent_dedicated"
+        assert result["step"]["evidence"]["result"]["extraction_method"] == "dom"
+        assert result["step"]["evidence"]["result"]["host_interactive"] is False
         act_verify.assert_called_once()
+
+    def test_eval_social_read_only_platforms_are_manifest_plannable(self):
+        """A model should see read-only social search actions for each target platform."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        manifest = runtime_tool_manifest(tool="social_media")
+
+        assert manifest["ok"] is True
+        search = manifest["tools"]["social_media"]["actions"]["search"]
+        extract = manifest["tools"]["social_media"]["actions"]["extract"]
+        assert search["risk"] == "read"
+        assert extract["risk"] == "read"
+        assert search["host_interactive"] is False
+        assert search["requires_host_confirmation"] is False
+
+        from desktop_mcp.tools import social_media as sm
+
+        for platform in ["x", "youtube", "tiktok", "instagram"]:
+            result = sm.social_platform_url(platform=platform, query="codex")
+            assert result["ok"] is True
+            assert result["platform"] == platform
+            assert result["read_only"] is True
+            assert result["url"].startswith("https://")
 
     def test_eval_youtube_studio_blocks_publish_without_host_confirmation(self):
         """A YouTube Studio task should refuse destructive/high actions without host confirmation."""
@@ -639,6 +671,165 @@ class TestBrowserUserOpen:
         assert result["verified"] is False
         assert result["window"] is None
         assert "not found" in result["verification_error"]
+
+
+class TestAgentBrowser:
+    """Test the dedicated browser controlled by the model without host mouse/keyboard input."""
+
+    def test_agent_browser_start_uses_dedicated_persistent_profile(self):
+        """Starting an agent browser should use a named Playwright profile, not the user browser."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x"}) as create:
+            with patch.object(ab._bs, "browser_start_instance", return_value={
+                "ok": True,
+                "session_id": "s1",
+                "page_id": "p1",
+                "url": "https://x.com/search?q=codex",
+                "profile_name": "agent-social-x",
+                "instance_name": "agent-social-x",
+                "headless": True,
+            }) as start:
+                result = ab.agent_browser_start(
+                    platform="x",
+                    url="https://x.com/search?q=codex",
+                    headless=True,
+                )
+
+        assert result["ok"] is True
+        assert result["browser_context"] == "agent_dedicated"
+        assert result["automation"] == "playwright"
+        assert result["host_interactive"] is False
+        assert result["profile_name"] == "agent-social-x"
+        create.assert_called_once()
+        start.assert_called_once()
+        assert start.call_args.kwargs["profile_name"] == "agent-social-x"
+        assert start.call_args.kwargs["instance_name"] == "agent-social-x"
+        assert start.call_args.kwargs["headless"] is True
+
+    def test_agent_browser_start_navigates_reused_instance_to_requested_url(self):
+        """A reused agent browser instance should navigate before extraction."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x"}):
+            with patch.object(ab._bs, "browser_start_instance", return_value={
+                "ok": True,
+                "reused": True,
+                "session_id": "s1",
+                "page_id": "p1",
+                "url": "https://x.com/home",
+                "profile_name": "agent-social-x",
+                "instance_name": "agent-social-x",
+            }):
+                with patch.object(ab._bs, "browser_navigate", return_value={
+                    "session_id": "s1",
+                    "page_id": "p1",
+                    "url": target_url,
+                    "title": "Search / X",
+                }) as navigate:
+                    result = ab.agent_browser_start(platform="x", url=target_url)
+
+        assert result["ok"] is True
+        assert result["url"] == target_url
+        assert result["navigated"] is True
+        navigate.assert_called_once_with(session_id="s1", page_id="p1", url=target_url)
+
+    def test_agent_browser_manifest_is_not_host_interactive(self):
+        """The manifest should expose agent browser actions without host UI confirmation."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        manifest = runtime_tool_manifest(tool="agent_browser")
+
+        assert manifest["ok"] is True
+        start = manifest["tools"]["agent_browser"]["actions"]["start"]
+        assert start["host_interactive"] is False
+        assert start["requires_host_confirmation"] is False
+        assert "profile_name" in [param["name"] for param in start["parameters"]]
+
+
+class TestSocialMediaReadOnly:
+    """Test social media read-only helpers and DOM extraction."""
+
+    @pytest.mark.parametrize(
+        "platform,expected",
+        [
+            ("x", "https://x.com/search?q=codex&src=typed_query&f=top"),
+            ("youtube", "https://www.youtube.com/results?search_query=codex"),
+            ("tiktok", "https://www.tiktok.com/search?q=codex"),
+            ("instagram", "https://www.instagram.com/explore/search/keyword/?q=codex"),
+        ],
+    )
+    def test_social_platform_url_builds_read_only_search_urls(self, platform, expected):
+        """Platform URLs should point at read-only search surfaces."""
+        from desktop_mcp.tools.social_media import social_platform_url
+
+        result = social_platform_url(platform=platform, query="codex")
+
+        assert result["ok"] is True
+        assert result["read_only"] is True
+        assert result["url"] == expected
+
+    def test_social_extract_x_reads_articles_from_dom(self):
+        """X extraction should evaluate the page DOM directly instead of OCR."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakePage:
+            url = "https://x.com/search?q=codex"
+
+            def __init__(self):
+                self.script = ""
+                self.limit = None
+
+            def evaluate(self, script, limit):
+                self.script = script
+                self.limit = limit
+                return [{"platform": "x", "text": "Codex post", "url": "https://x.com/a/status/1"}]
+
+        page = FakePage()
+        with patch.object(sm, "get_playwright_page", return_value=({"session_id": "s1"}, "p1", page)):
+            result = sm.social_extract(platform="x", session_id="s1", limit=7)
+
+        assert result["ok"] is True
+        assert result["platform"] == "x"
+        assert result["extraction_method"] == "dom"
+        assert result["items"][0]["text"] == "Codex post"
+        assert result["item_count"] == 1
+        assert page.limit == 7
+        assert "querySelectorAll('article')" in page.script
+
+    def test_social_search_starts_agent_browser_then_extracts_dom(self):
+        """Search should orchestrate agent_browser.start then DOM extraction."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "p1",
+            "browser_context": "agent_dedicated",
+            "host_interactive": False,
+            "profile_name": "agent-social-x",
+            "url": "https://x.com/search?q=codex&src=typed_query&f=top",
+        }) as start:
+            with patch.object(sm, "social_extract", return_value={
+                "ok": True,
+                "platform": "x",
+                "extraction_method": "dom",
+                "items": [{"platform": "x", "text": "Codex post"}],
+                "item_count": 1,
+            }) as extract:
+                result = sm.social_search(platform="x", query="codex", limit=3)
+
+        assert result["ok"] is True
+        assert result["read_only"] is True
+        assert result["browser_context"] == "agent_dedicated"
+        assert result["host_interactive"] is False
+        assert result["extraction_method"] == "dom"
+        assert result["items"][0]["text"] == "Codex post"
+        start.assert_called_once()
+        assert start.call_args.kwargs["url"] == "https://x.com/search?q=codex&src=typed_query&f=top"
+        assert start.call_args.kwargs["headless"] is True
+        extract.assert_called_once_with(platform="x", session_id="s1", page_id="p1", limit=3)
 
 
 class TestVideoModule:

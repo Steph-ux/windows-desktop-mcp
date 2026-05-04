@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Windows desktop & browser control MCP server — **15 super-tools** for full automation.
+Windows desktop & browser control MCP server - **18 super-tools** for full automation.
 
 ## Install
 
@@ -34,7 +34,7 @@ desktop-mcp-dashboard
 ```
 Then open `http://localhost:8080` in your browser.
 
-## Super-Tools (16)
+## Super-Tools (18)
 
 | Tool | Actions | Domain |
 |---|---|---|
@@ -45,6 +45,8 @@ Then open `http://localhost:8080` in your browser.
 | `browser_observe` | screenshots, wait conditions… | Observation |
 | `browser_network` | cookies, intercept, HAR, storage… | Network |
 | `browser_debug` | traces, coverage, CDP, metrics… | Debug |
+| `agent_browser` | ensure_profile, start, status, stop | Dedicated agent browser |
+| `social_media` | platform_url, supported_platforms, search, extract | Read-only social DOM extraction |
 | `desktop_interact` | click, keyboard, mouse, clipboard, macros | Desktop input |
 | `desktop_window` | list, focus, resize, UI inspect… | Windows |
 | `desktop_observe` | capture, OCR, smart OCR, video, monitors | Vision |
@@ -62,6 +64,8 @@ Then open `http://localhost:8080` in your browser.
 - **Multi-Monitor** — capture and interact across all displays
 - **Workflow Engine** — chain actions, use variables, pre-built templates
 - **Operator Sessions** — log goals, steps, risk, evidence, and outcomes
+- **Dedicated Agent Browser** — isolated Playwright profiles for model-controlled browsing without using the host mouse, keyboard, or default browser
+- **Social Media Read-Only DOM Extraction** — X, YouTube, YouTube Studio, TikTok, and Instagram search/read scenarios through DOM/CDP instead of OCR where possible
 - **Strict Non-Interactive Mode** — blocks host mouse, keyboard, focus, and default-browser actions unless the host/user explicitly confirms
 - **Plugin System** — drop `.py` files in `~/.pm/desktop-mcp/plugins/`
 - **CDP Attach** — connect to an existing Chrome browser with your cookies
@@ -72,6 +76,27 @@ Then open `http://localhost:8080` in your browser.
 Strict non-interactive mode is enabled by default. Actions that can affect the user's real desktop, cursor, keyboard focus, clipboard, or default browser are marked as `host_interactive` in `runtime(manifest)` and are blocked unless the call includes `confirmed=true` and `confirmation_source="user"` or `"host"`.
 
 Set `WINDOWS_DESKTOP_MCP_STRICT_NON_INTERACTIVE=0` only in a dedicated automation VM or throwaway desktop session.
+
+## Dedicated Agent Browser
+
+Use `agent_browser` for logged-in or persistent browser automation that must not touch the user's real browser, cursor, or keyboard. It creates named Playwright profiles such as `agent-social-x` and starts isolated instances controlled through browser APIs.
+
+```python
+agent_browser -> ensure_profile(platform="x")
+agent_browser -> start(platform="x", url="https://x.com/search?q=codex&src=typed_query&f=top")
+```
+
+For social media read-only work, use `social_media` instead of `browser_session -> user_open`:
+
+```python
+social_media -> search(platform="x", query="codex", limit=10)
+social_media -> search(platform="youtube", query="codex", limit=10)
+social_media -> search(platform="tiktok", query="codex", limit=10)
+social_media -> search(platform="instagram", query="codex", limit=10)
+social_media -> extract(platform="youtube_studio", session_id="...")
+```
+
+These actions are designed for model planning: `social_media/search` and `social_media/extract` are `read` risk, non-host-interactive, and return structured items with `extraction_method="dom"`.
 
 ## Workflow Templates
 
