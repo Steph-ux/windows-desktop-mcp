@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 import unicodedata
@@ -190,6 +192,15 @@ _RANK_WEIGHTS = {
 }
 
 
+def _run_browser_call(fn, /, *args, **kwargs):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return fn(*args, **kwargs)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: fn(*args, **kwargs)).result()
+
+
 def _platform(platform: str) -> str:
     key = str(platform or "").strip().lower().replace(" ", "_")
     key = _PLATFORM_ALIASES.get(key, key)
@@ -255,7 +266,7 @@ def social_extract(
     safe_limit = max(1, min(int(limit), 100))
     snapshot = _playwright_session_snapshot(session_id)
     try:
-        session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+        session, resolved_page_id, page = _run_browser_call(get_playwright_page, session_id, page_id=page_id)
         return _extract_from_page(
             target=target,
             session_id=session_id,
@@ -351,7 +362,7 @@ def _evaluate_items_with_wait(
 
     while True:
         attempts += 1
-        raw_items = page.evaluate(script, safe_limit)
+        raw_items = _run_browser_call(page.evaluate, script, safe_limit)
         items = _merge_items(items, _normalize_items(raw_items, target, safe_limit), safe_limit)
         if items or time.monotonic() >= deadline:
             break
@@ -368,7 +379,7 @@ def _evaluate_items_with_wait(
         if pause_seconds:
             time.sleep(pause_seconds)
         attempts += 1
-        raw_items = page.evaluate(script, safe_limit)
+        raw_items = _run_browser_call(page.evaluate, script, safe_limit)
         before_count = len(items)
         items = _merge_items(items, _normalize_items(raw_items, target, safe_limit), safe_limit)
         if len(items) == before_count and _scroll_is_exhausted(scroll_result):
@@ -379,9 +390,9 @@ def _evaluate_items_with_wait(
 
 def _scroll_page(page: Any) -> dict[str, Any]:
     try:
-        result = page.evaluate(_SCROLL_SCRIPT)
+        result = _run_browser_call(page.evaluate, _SCROLL_SCRIPT)
     except TypeError:
-        result = page.evaluate(_SCROLL_SCRIPT, None)
+        result = _run_browser_call(page.evaluate, _SCROLL_SCRIPT, None)
     return result if isinstance(result, dict) else {}
 
 
@@ -452,7 +463,8 @@ def _extract_from_reattached_cdp(
     rank: bool,
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    attached = _bs.browser_attach_cdp(
+    attached = _run_browser_call(
+        _bs.browser_attach_cdp,
         endpoint=str(snapshot["cdp_endpoint"]),
         browser=str(snapshot.get("browser_name") or "chrome"),
         instance_name=snapshot.get("instance_name"),
@@ -463,7 +475,7 @@ def _extract_from_reattached_cdp(
         grant_permissions=snapshot.get("granted_permissions"),
     )
     session_id = attached["session_id"]
-    _session, resolved_page_id, page = get_playwright_page(session_id, page_id=attached.get("page_id") or page_id)
+    _session, resolved_page_id, page = _run_browser_call(get_playwright_page, session_id, page_id=attached.get("page_id") or page_id)
     result = _extract_from_page(
         target=target,
         session_id=session_id,

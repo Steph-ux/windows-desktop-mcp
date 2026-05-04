@@ -1221,6 +1221,39 @@ class TestSocialMediaReadOnly:
         assert ranked[0]["metrics"][metric] == expected
         assert ranked[0]["rank_position"] == 1
 
+    def test_social_run_browser_call_uses_worker_thread_when_loop_is_running(self):
+        """Social media DOM extraction should move sync Playwright calls off the asyncio loop thread."""
+        from desktop_mcp.tools import social_media as sm
+
+        called = {}
+
+        class FakeLoop:
+            pass
+
+        class FakeFuture:
+            def result(self):
+                return {"ok": True}
+
+        class FakeExecutor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def submit(self, fn):
+                called["submitted"] = True
+                called["value"] = fn()
+                return FakeFuture()
+
+        with patch.object(sm.asyncio, "get_running_loop", return_value=FakeLoop()):
+            with patch.object(sm, "ThreadPoolExecutor", return_value=FakeExecutor()):
+                result = sm._run_browser_call(lambda: {"ok": True})
+
+        assert called["submitted"] is True
+        assert called["value"] == {"ok": True}
+        assert result == {"ok": True}
+
     def test_social_extract_reattaches_cdp_when_session_thread_is_stale(self):
         """CDP extraction should recover when a previous MCP call stored a dead Playwright thread."""
         from desktop_mcp.tools import social_media as sm
