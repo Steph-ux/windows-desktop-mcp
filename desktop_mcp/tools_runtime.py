@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import inspect
+from typing import Any
+
 from .app import mcp
 from .runtime import clear_events, recent_events, runtime_health_check, runtime_status
+from .tool_policy import classify_action_risk
 
 
 def runtime_get_status() -> dict:
@@ -23,3 +27,40 @@ def runtime_clear_events() -> dict:
 def runtime_healthcheck() -> dict:
     """Return a consolidated runtime health report for the MCP server."""
     return runtime_health_check()
+
+
+def runtime_tool_manifest(tool: str | None = None, include_signatures: bool = True) -> dict[str, Any]:
+    """Return the consolidated tool/action manifest for model-side planning."""
+    from .tools.consolidated import R
+
+    requested = (tool or "").strip()
+    if requested and requested not in R:
+        return {"ok": False, "error": f"Unknown tool: {requested!r}", "available_tools": sorted(R)}
+
+    items: dict[str, Any] = {}
+    selected = {requested: R[requested]} if requested else R
+    for tool_name, (doc, actions) in selected.items():
+        action_items: dict[str, Any] = {}
+        for action_name, fn in sorted(actions.items()):
+            payload: dict[str, Any] = {
+                "doc": inspect.getdoc(fn) or "",
+                "risk": classify_action_risk(tool_name, action_name),
+            }
+            if include_signatures:
+                payload["signature"] = str(inspect.signature(fn))
+                payload["parameters"] = [
+                    {
+                        "name": name,
+                        "required": param.default is inspect.Parameter.empty,
+                        "default": None if param.default is inspect.Parameter.empty else repr(param.default),
+                        "kind": str(param.kind).split(".")[-1],
+                    }
+                    for name, param in inspect.signature(fn).parameters.items()
+                ]
+            action_items[action_name] = payload
+        items[tool_name] = {
+            "doc": doc,
+            "actions": action_items,
+        }
+
+    return {"ok": True, "tool_count": len(items), "tools": items}

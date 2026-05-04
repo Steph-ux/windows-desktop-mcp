@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import inspect
 import json
+import os
 import re
 import subprocess
 import time
 import uuid
+import webbrowser
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +53,7 @@ from ..shared.playwright_utils import ensure_dom_revision_tracker, validate_js_e
 from ..state import SESSION_MAX_AGE_MINUTES
 from ..desktop_core import find_window
 from .capture import capture_window, save_window_screenshot
-from .windows import focus_window, list_windows, move_resize_window
+from .windows import focus_window, list_windows, move_resize_window, wait_for_window
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -676,6 +679,54 @@ def browser_open_session(
         grant_permissions=grant_permissions,
         preset_name=preset_name,
     )
+
+
+def browser_user_open(
+    url: str,
+    wait_title_contains: str = "",
+    wait_title_regex: str = "",
+    timeout_seconds: float = 10.0,
+    focus: bool = True,
+) -> dict[str, Any]:
+    """Open a URL in the user's default browser/profile for logged-in sites."""
+    launched = _open_url_in_default_browser(url)
+    window = None
+    verified = False
+    verification_error = None
+    if wait_title_contains or wait_title_regex:
+        try:
+            window = wait_for_window(
+                title_regex=wait_title_regex or None,
+                title_filter=wait_title_contains,
+                timeout_seconds=timeout_seconds,
+            )
+            verified = True
+            if focus and window.get("handle"):
+                window = focus_window(handle=int(window["handle"]))
+        except Exception as exc:
+            verification_error = str(exc)
+
+    result = {
+        "ok": bool(launched),
+        "url": url,
+        "browser_context": "user_default",
+        "automation": "desktop",
+        "verified": verified,
+        "window": window,
+        "verification_error": verification_error,
+        "note": "Uses the user's default browser/profile, not an isolated Playwright context.",
+    }
+    record_event("browser_user_open", url=url, verified=verified, launched=bool(launched))
+    return result
+
+
+def _open_url_in_default_browser(url: str) -> bool:
+    if os.name == "nt":
+        os.startfile(url)  # type: ignore[attr-defined]
+        return True
+    return bool(webbrowser.open(url, new=2, autoraise=True))
+
+
 def browser_attach_cdp(
     endpoint: str,
     browser: str = "chrome",
@@ -2950,4 +3001,41 @@ def browser_shadow_query(
     return result
 
 
+class _AwaitableDict(dict):
+    def __await__(self):
+        async def _value():
+            return self
+
+        return _value().__await__()
+
+
+class _AwaitableList(list):
+    def __await__(self):
+        async def _value():
+            return self
+
+        return _value().__await__()
+
+
+def _legacy_awaitable(value: Any) -> Any:
+    if isinstance(value, dict) and not isinstance(value, _AwaitableDict):
+        return _AwaitableDict(value)
+    if isinstance(value, list) and not isinstance(value, _AwaitableList):
+        return _AwaitableList(value)
+    return value
+
+
+def _enable_legacy_awaitable_browser_tools() -> None:
+    for name, fn in list(globals().items()):
+        if not name.startswith("browser_") or not callable(fn) or inspect.iscoroutinefunction(fn):
+            continue
+
+        @functools.wraps(fn)
+        def wrapper(*args, __fn=fn, **kwargs):
+            return _legacy_awaitable(__fn(*args, **kwargs))
+
+        globals()[name] = wrapper
+
+
+_enable_legacy_awaitable_browser_tools()
 __all__ = [name for name in globals() if name.startswith("browser_")]

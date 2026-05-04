@@ -32,6 +32,7 @@ from .tools.runtime import *  # noqa: F401,F403
 from .tools.system import *  # noqa: F401,F403
 from .tools.windows import *  # noqa: F401,F403
 from .tools_ai import *  # noqa: F401,F403
+from .tools import legacy_flat as _legacy_flat  # noqa: F401 - compatibility aliases
 from .tools import consolidated as _consolidated  # noqa: F401 — side-effect registers super-tools
 from .tools.capture import stop_all_desktop_watch_sessions as _stop_all_desktop_watch_sessions
 

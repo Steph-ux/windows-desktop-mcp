@@ -22,6 +22,7 @@ from . import runtime as _rt
 from . import video as _vid
 from . import monitors as _mon
 from . import workflows as _wf
+from . import operator as _op
 from . import smart_ocr as _socr
 from .. import tools_ai as _ai
 from .. import tools_runtime as _trt
@@ -70,12 +71,12 @@ R: dict[str, tuple[str, dict[str, Any]]] = {}
 
 R["browser_session"] = (
     "Manage browser lifecycle, instances, profiles, and presets.\n"
-    "Actions: open, close, list, cleanup, "
+    "Actions: open, user_open, close, list, cleanup, "
     "start, stop, stop_all, resume, get, list_instances, delete, "
     "attach_cdp, attach_existing, launch, debug, endpoints, "
     "profile_create, profile_get, profile_update, profile_list, profile_delete, profile_cleanup, profile_import, profile_export, "
     "preset_save, preset_get, preset_list, preset_delete", {
-    "open": _bs.browser_open_session, "close": _bs.browser_close_session,
+    "open": _bs.browser_open_session, "user_open": _bs.browser_user_open, "close": _bs.browser_close_session,
     "list": _bs.browser_list_sessions, "cleanup": _bs.browser_cleanup_sessions,
     "start": _bs.browser_start_instance, "stop": _bs.browser_stop_instance,
     "stop_all": _bs.browser_stop_instance_and_browser, "resume": _bs.browser_resume_instance,
@@ -316,9 +317,10 @@ R["system_ops"] = (
 
 R["runtime"] = (
     "MCP runtime status, analysis, and health.\n"
-    "Actions: status, events, clear, health, analysis_export, analysis_latest, ping", {
+    "Actions: status, events, clear, health, manifest, analysis_export, analysis_latest, ping", {
     "status": _trt.runtime_get_status, "events": _trt.runtime_get_recent_events,
     "clear": _trt.runtime_clear_events, "health": _trt.runtime_healthcheck,
+    "manifest": _trt.runtime_tool_manifest,
     "analysis_export": _cap.export_analysis_history, "analysis_latest": _cap.get_latest_analysis,
     "ping": _rt.ping,
 })
@@ -326,13 +328,26 @@ R["runtime"] = (
 from . import workflow_templates as _wt
 from .plugins import discover_plugins as _discover_plugins
 
+R["operator"] = (
+    "Model operator task sessions with goal, steps, risk, and evidence.\n"
+    "Actions: start, step, finish, session", {
+    "start": _op.operator_start,
+    "step": _op.operator_step,
+    "finish": _op.operator_finish,
+    "session": _op.operator_session,
+})
+
 R["workflow"] = (
     "Autonomous workflow engine — chain actions into reusable sequences.\n"
     "Actions: run, record_start, record_step, record_stop, list, load, delete, "
+    "observe, risk, act_verify, "
     "template_list, template_get, template_instantiate", {
     "run": _wf.workflow_run, "record_start": _wf.workflow_record_start,
     "record_step": _wf.workflow_record_step, "record_stop": _wf.workflow_record_stop,
     "list": _wf.workflow_list, "load": _wf.workflow_load, "delete": _wf.workflow_delete,
+    "observe": _wf.workflow_observe,
+    "risk": _wf.workflow_risk,
+    "act_verify": _wf.workflow_act_verify,
     # Templates
     "template_list": _wt.template_list,
     "template_get": _wt.template_get,
@@ -367,5 +382,3 @@ for _name, (_doc, _actions) in R.items():
         tool_fn.__doc__ = doc
         return tool_fn
     mcp.tool()(_make())
-
-

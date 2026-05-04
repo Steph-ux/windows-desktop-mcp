@@ -100,6 +100,82 @@ class TestRegistry:
         total = sum(len(actions) for _, (_, actions) in R.items())
         assert total >= 230, f"Only {total} actions, expected >= 230"
 
+    def test_runtime_manifest_exposes_actions_and_signatures(self):
+        """Runtime manifest should expose model-friendly action metadata."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        result = runtime_tool_manifest(tool="browser_session")
+
+        assert result["ok"] is True
+        assert result["tool_count"] == 1
+        browser_session = result["tools"]["browser_session"]
+        assert "open" in browser_session["actions"]
+        assert "signature" in browser_session["actions"]["open"]
+        assert "risk" in browser_session["actions"]["open"]
+        assert any(
+            param["name"] == "url" and param["required"]
+            for param in browser_session["actions"]["open"]["parameters"]
+        )
+
+    def test_browser_session_manifest_exposes_user_open_for_logged_in_browser(self):
+        """Browser sessions should expose a user-browser path for logged-in sites."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        result = runtime_tool_manifest(tool="browser_session")
+
+        action = result["tools"]["browser_session"]["actions"]["user_open"]
+        param_names = {param["name"] for param in action["parameters"]}
+        assert action["risk"] == "medium"
+        assert {"url", "wait_title_contains"} <= param_names
+
+    def test_runtime_manifest_unknown_tool_returns_available_tools(self):
+        """Unknown manifest requests should return structured guidance."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        result = runtime_tool_manifest(tool="missing")
+
+        assert result["ok"] is False
+        assert "available_tools" in result
+        assert "browser_session" in result["available_tools"]
+
+    def test_workflow_manifest_uses_target_action_for_nested_actions(self):
+        """Nested workflow actions should not collide with the super-tool action field."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        result = runtime_tool_manifest(tool="workflow")
+
+        actions = result["tools"]["workflow"]["actions"]
+        act_verify_params = {
+            param["name"]
+            for param in actions["act_verify"]["parameters"]
+        }
+        risk_params = {
+            param["name"]
+            for param in actions["risk"]["parameters"]
+        }
+        assert "target_action" in act_verify_params
+        assert "target_action" in risk_params
+        assert "action" not in act_verify_params
+        assert "allowed_actions" in act_verify_params
+        assert "denied_actions" in act_verify_params
+        assert "confirmation_source" in act_verify_params
+
+    def test_operator_manifest_exposes_task_session_actions(self):
+        """Operator should expose task-session primitives for model-driven work."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        result = runtime_tool_manifest(tool="operator")
+
+        assert result["ok"] is True
+        actions = result["tools"]["operator"]["actions"]
+        assert {"start", "step", "finish", "session"} <= set(actions)
+        step_params = {
+            param["name"]
+            for param in actions["step"]["parameters"]
+        }
+        assert "target_action" in step_params
+        assert actions["step"]["risk"] == "medium"
+
 
 class TestWorkflowEngine:
     """Test the workflow engine module."""
@@ -155,6 +231,350 @@ class TestWorkflowEngine:
         variables = {"step_0": {"url": "https://example.com"}}
         result = _substitute_vars({"target": "{{step_0.url}}/page"}, variables)
         assert result["target"] == "https://example.com/page"
+
+    def test_workflow_risk_single_action(self):
+        """Risk helper should classify one tool/action."""
+        from desktop_mcp.tools.workflows import workflow_risk
+
+        result = workflow_risk("system_ops", "delete")
+
+        assert result["ok"] is True
+        assert result["risk"] == "destructive"
+
+    def test_workflow_dispatch_accepts_target_action_for_risk(self):
+        """The consolidated MCP dispatcher should pass target_action through."""
+        from desktop_mcp.tools.consolidated import R, _d
+
+        _doc, actions = R["workflow"]
+        result = _d(actions, "risk", tool="system_ops", target_action="delete")
+
+        assert result["ok"] is True
+        assert result["action"] == "delete"
+        assert result["risk"] == "destructive"
+
+    def test_workflow_act_verify_blocks_high_risk_without_confirmation(self):
+        """High-risk actions should require explicit confirmation by default."""
+        from desktop_mcp.tools.workflows import workflow_act_verify
+
+        result = workflow_act_verify(tool="system_ops", target_action="run", kwargs={"command": ["echo", "hi"]})
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert result["risk"] == "high"
+        assert result["confirmation"]["required"] is True
+        assert result["confirmation"]["confirmed"] is False
+
+    def test_workflow_act_verify_requires_host_confirmation_for_high_risk(self):
+        """Model-provided confirmation alone should not unlock high-risk actions."""
+        from desktop_mcp.tools.workflows import workflow_act_verify
+
+        result = workflow_act_verify(
+            tool="system_ops",
+            target_action="run",
+            kwargs={"command": ["echo", "hi"]},
+            confirmed=True,
+        )
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert result["phase"] == "confirmation"
+        assert result["risk"] == "high"
+        assert result["confirmation"]["required"] is True
+        assert result["confirmation"]["allowed_sources"] == ["host", "user"]
+
+    def test_workflow_act_verify_denied_action_blocks_before_observe(self):
+        """Denylisted actions should be blocked before observation or dispatch."""
+        from desktop_mcp.tools import workflows as wf
+
+        with patch.object(wf, "workflow_observe") as observe:
+            result = wf.workflow_act_verify(
+                tool="runtime",
+                target_action="status",
+                denied_actions=["runtime/status"],
+            )
+
+        assert result["ok"] is False
+        assert result["phase"] == "policy"
+        assert result["blocked"] is True
+        assert result["policy"]["matched"] == "runtime/status"
+        observe.assert_not_called()
+
+    def test_workflow_act_verify_allowlist_blocks_unlisted_action(self):
+        """Allowlists should prevent actions not explicitly allowed."""
+        from desktop_mcp.tools.workflows import workflow_act_verify
+
+        result = workflow_act_verify(
+            tool="browser_session",
+            target_action="user_open",
+            allowed_actions=["runtime/status"],
+        )
+
+        assert result["ok"] is False
+        assert result["phase"] == "policy"
+        assert result["blocked"] is True
+        assert "not allowed" in result["reason"]
+
+    def test_workflow_dispatch_act_verify_uses_target_action(self):
+        """act_verify should block sensitive nested actions through the dispatcher."""
+        from desktop_mcp.tools.consolidated import R, _d
+
+        _doc, actions = R["workflow"]
+        result = _d(
+            actions,
+            "act_verify",
+            tool="system_ops",
+            target_action="run",
+            kwargs={"command": ["echo", "hi"]},
+        )
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert result["action"] == "run"
+        assert result["risk"] == "high"
+
+    def test_workflow_act_verify_runs_with_precheck_and_post_observation(self):
+        """act_verify should run one action and return before/after observations."""
+        from desktop_mcp.tools import workflows as wf
+
+        observations = [
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "before"}},
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "after"}},
+        ]
+
+        with patch.object(wf, "workflow_observe", side_effect=observations):
+            result = wf.workflow_act_verify(
+                tool="runtime",
+                target_action="status",
+                preconditions={},
+                verify={},
+            )
+
+        assert result["ok"] is True
+        assert result["risk"] == "read"
+        assert result["before"]["observation"]["image_hash"] == "before"
+        assert result["after"]["observation"]["image_hash"] == "after"
+        assert result["result"]["active_playwright_sessions"] >= 0
+
+
+class TestAgenticEvals:
+    """Model-facing evals that prove manifest-driven planning works."""
+
+    def test_eval_social_search_uses_user_browser_and_operator_log(self):
+        """A social-search task should choose user_open and record evidence."""
+        from desktop_mcp.tools import operator as op
+
+        op._OPERATOR_SESSIONS.clear()
+        with patch.object(op, "workflow_observe", return_value={"ok": True, "scope": "desktop", "observation": {}}):
+            started = op.operator_start(
+                goal="Search X for Codex posts",
+                context={"app": "x", "requires_logged_in_browser": True},
+                constraints=["read-only"],
+            )
+        action_result = {
+            "ok": True,
+            "tool": "browser_session",
+            "action": "user_open",
+            "risk": "medium",
+            "before": {"ok": True},
+            "result": {"ok": True, "browser_context": "user_default", "verified": True},
+            "verification": {"ok": True, "checks": []},
+            "after": {"ok": True},
+        }
+
+        with patch.object(op, "workflow_act_verify", return_value=action_result) as act_verify:
+            result = op.operator_step(
+                session_id=started["session_id"],
+                tool="browser_session",
+                target_action="user_open",
+                kwargs={"url": "https://x.com/search?q=codex", "wait_title_contains": "Recherche / X"},
+                rationale="Use the logged-in browser profile for X.",
+            )
+
+        assert result["ok"] is True
+        assert result["step"]["tool"] == "browser_session"
+        assert result["step"]["action"] == "user_open"
+        assert result["step"]["evidence"]["result"]["browser_context"] == "user_default"
+        act_verify.assert_called_once()
+
+    def test_eval_youtube_studio_blocks_publish_without_host_confirmation(self):
+        """A YouTube Studio task should refuse destructive/high actions without host confirmation."""
+        from desktop_mcp.tools import workflows as wf
+
+        with patch.object(wf, "classify_action_risk", return_value="high"):
+            result = wf.workflow_act_verify(
+                tool="browser_interact",
+                target_action="click_text",
+                kwargs={"text": "Publish"},
+                confirmed=True,
+            )
+
+        assert result["ok"] is False
+        assert result["phase"] == "confirmation"
+        assert result["blocked"] is True
+
+    def test_eval_desktop_app_allowlist_permits_only_runtime_check(self):
+        """A desktop-app task should be able to lock execution to an allowlist."""
+        from desktop_mcp.tools import workflows as wf
+
+        observations = [
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "before"}},
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "after"}},
+        ]
+
+        with patch.object(wf, "workflow_observe", side_effect=observations):
+            result = wf.workflow_act_verify(
+                tool="runtime",
+                target_action="status",
+                allowed_actions=["runtime/status"],
+            )
+
+        assert result["ok"] is True
+        assert result["action"] == "status"
+        assert result["policy"]["ok"] is True
+
+
+class TestOperatorLayer:
+    """Test the operator task-session layer built on top of workflow."""
+
+    def test_operator_start_records_goal_context_and_initial_observation(self):
+        """Starting an operator session should create a model-friendly mission log."""
+        from desktop_mcp.tools import operator as op
+
+        op._OPERATOR_SESSIONS.clear()
+        observation = {"ok": True, "scope": "desktop", "observation": {"image_hash": "initial"}}
+
+        with patch.object(op, "workflow_observe", return_value=observation):
+            result = op.operator_start(
+                goal="Review YouTube Studio drafts",
+                context={"platform": "youtube"},
+                constraints=["do not publish"],
+            )
+
+        assert result["ok"] is True
+        assert result["session"]["goal"] == "Review YouTube Studio drafts"
+        assert result["session"]["context"]["platform"] == "youtube"
+        assert result["session"]["constraints"] == ["do not publish"]
+        assert result["session"]["status"] == "active"
+        assert result["session"]["steps"] == []
+        assert result["session"]["initial_observation"] == observation
+
+    def test_operator_step_runs_act_verify_and_records_evidence(self):
+        """Operator steps should execute through workflow.act_verify and append evidence."""
+        from desktop_mcp.tools import operator as op
+
+        op._OPERATOR_SESSIONS.clear()
+        with patch.object(op, "workflow_observe", return_value={"ok": True, "scope": "desktop", "observation": {}}):
+            started = op.operator_start(goal="Inspect account settings")
+        action_result = {
+            "ok": True,
+            "tool": "runtime",
+            "action": "status",
+            "risk": "read",
+            "before": {"ok": True},
+            "result": {"active_playwright_sessions": 0},
+            "verification": {"ok": True, "checks": []},
+            "after": {"ok": True},
+        }
+
+        with patch.object(op, "workflow_act_verify", return_value=action_result) as act_verify:
+            result = op.operator_step(
+                session_id=started["session_id"],
+                tool="runtime",
+                target_action="status",
+                rationale="Confirm MCP runtime is alive before acting.",
+            )
+
+        assert result["ok"] is True
+        assert result["step"]["index"] == 0
+        assert result["step"]["tool"] == "runtime"
+        assert result["step"]["action"] == "status"
+        assert result["step"]["risk"] == "read"
+        assert result["step"]["rationale"] == "Confirm MCP runtime is alive before acting."
+        assert result["session"]["steps"][0]["evidence"]["verification"]["ok"] is True
+        act_verify.assert_called_once()
+
+    def test_operator_step_rejects_missing_session(self):
+        """Operator steps should not execute without an active session."""
+        from desktop_mcp.tools import operator as op
+
+        op._OPERATOR_SESSIONS.clear()
+
+        result = op.operator_step(session_id="missing", tool="runtime", target_action="status")
+
+        assert result["ok"] is False
+        assert result["phase"] == "session"
+        assert "missing" in result["error"]
+
+    def test_operator_finish_closes_session_with_final_observation(self):
+        """Finishing a session should capture final state and summarize outcomes."""
+        from desktop_mcp.tools import operator as op
+
+        op._OPERATOR_SESSIONS.clear()
+        observations = [
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "initial"}},
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "final"}},
+        ]
+
+        with patch.object(op, "workflow_observe", side_effect=observations):
+            started = op.operator_start(goal="Check dashboard")
+            result = op.operator_finish(
+                session_id=started["session_id"],
+                outcome="Dashboard checked without changes.",
+                success=True,
+            )
+
+        assert result["ok"] is True
+        assert result["session"]["status"] == "completed"
+        assert result["session"]["outcome"] == "Dashboard checked without changes."
+        assert result["session"]["final_observation"]["observation"]["image_hash"] == "final"
+        assert result["summary"]["step_count"] == 0
+        assert result["summary"]["failed_steps"] == 0
+
+
+class TestBrowserUserOpen:
+    """Test user-browser opening for logged-in account workflows."""
+
+    def test_browser_user_open_launches_default_browser_and_verifies_window(self):
+        """user_open should use the OS default browser instead of an isolated Playwright profile."""
+        from desktop_mcp.tools import browser_sessions as bs
+
+        expected_window = {
+            "handle": 123,
+            "title": "codex - Recherche / X - Google Chrome",
+        }
+
+        with patch.object(bs, "_open_url_in_default_browser", return_value=True) as open_url:
+            with patch.object(bs, "wait_for_window", return_value=expected_window) as wait:
+                result = bs.browser_user_open(
+                    url="https://x.com/search?q=codex",
+                    wait_title_contains="Recherche / X",
+                    timeout_seconds=3,
+                )
+
+        assert result["ok"] is True
+        assert result["url"] == "https://x.com/search?q=codex"
+        assert result["browser_context"] == "user_default"
+        assert result["automation"] == "desktop"
+        assert result["window"] == expected_window
+        open_url.assert_called_once_with("https://x.com/search?q=codex")
+        wait.assert_called_once()
+
+    def test_browser_user_open_returns_guidance_when_window_verification_fails(self):
+        """user_open should still report launch success when title verification times out."""
+        from desktop_mcp.tools import browser_sessions as bs
+
+        with patch.object(bs, "_open_url_in_default_browser", return_value=True):
+            with patch.object(bs, "wait_for_window", side_effect=ValueError("not found")):
+                result = bs.browser_user_open(
+                    url="https://x.com/search?q=codex",
+                    wait_title_contains="Recherche / X",
+                    timeout_seconds=1,
+                )
+
+        assert result["ok"] is True
+        assert result["verified"] is False
+        assert result["window"] is None
+        assert "not found" in result["verification_error"]
 
 
 class TestVideoModule:

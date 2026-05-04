@@ -102,3 +102,46 @@ Recommended tools:
 - clipboard, input, macros, and runtime diagnostics
 
 Use `list_tools` from the MCP client for the exact runtime surface.
+
+Compatibility note: a small set of flat legacy MCP aliases such as `ping`,
+`browser_open_session`, and `desktop_watch_start` remains registered for older
+clients and tests. New model code should prefer `runtime(manifest)` and the
+super-tools below.
+
+## Agent Protocol
+
+This MCP is not an autonomous agent. The model owns planning, judgment, and stop/continue decisions. The MCP provides perception, action, short-lived runtime state, and verifiable results.
+
+Recommended loop:
+
+1. `runtime(manifest)` to inspect available tools, actions, signatures, and risk metadata.
+2. `workflow(observe)` to capture the current desktop, window, or browser state.
+3. `workflow(act_verify)` to execute one model-chosen action with explicit preconditions.
+4. Inspect the returned `before`, `result`, `verification`, and `after` fields before choosing the next action.
+
+`workflow(act_verify)` blocks `high` and `destructive` actions unless `confirmed=true` and `confirmation_source="host"` or `"user"` are provided. Model-only confirmation is not enough for sensitive actions.
+
+Use policy parameters to constrain task execution:
+
+1. `allowed_tools` and `denied_tools` restrict whole super-tools.
+2. `allowed_actions` and `denied_actions` restrict specific actions such as `runtime/status` or `system_ops/delete`.
+3. Policy checks run before observation or action dispatch.
+
+For longer tasks, use `operator` above `workflow`:
+
+1. `operator(start)` creates a task session with `goal`, `context`, `constraints`, and an initial observation.
+2. `operator(step)` runs exactly one `workflow(act_verify)` action and appends risk plus evidence to the session log.
+3. `operator(finish)` captures the final state and records the outcome.
+4. `operator(session)` returns the current mission log for audit or continuation.
+
+The `operator` layer is a log and control surface for the model. It does not decide the next step by itself.
+
+For logged-in web apps such as X, YouTube Studio, TikTok, or Instagram, prefer `browser_session(user_open)` when the task should use the user's existing browser account. `browser_session(open)` and `browser_session(launch)` create MCP-controlled browser contexts and may not share the user's logged-in cookies.
+
+Current Codex setup for this standalone repo should point `windows-desktop` at:
+
+```text
+C:\Development\Dev\project-manager\desktop-mcp-standalone\.venv\Scripts\windows-desktop-mcp.exe
+```
+
+Avoid pointing Codex at `pm-desktop-mcp` when working on this standalone package; that command loads the older embedded `pm.desktop_mcp` server.

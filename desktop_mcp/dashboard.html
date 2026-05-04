@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Desktop MCP Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e1a;--surface:#111827;--card:#1a2235;--border:#2a3550;--accent:#6366f1;--accent2:#8b5cf6;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;--text:#e2e8f0;--muted:#94a3b8;--radius:12px}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+
+/* Header */
+.header{background:linear-gradient(135deg,#1e1b4b 0%,#312e81 50%,#1e1b4b 100%);padding:20px 32px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border)}
+.header h1{font-size:20px;font-weight:700;background:linear-gradient(135deg,#a5b4fc,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header .badge{background:var(--green);color:#fff;font-size:11px;padding:3px 10px;border-radius:20px;font-weight:600}
+.header .version{color:var(--muted);font-size:13px;margin-left:auto}
+
+/* Nav */
+.nav{display:flex;gap:4px;padding:12px 32px;background:var(--surface);border-bottom:1px solid var(--border)}
+.nav button{background:none;border:1px solid transparent;color:var(--muted);padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all .2s}
+.nav button:hover{color:var(--text);background:var(--card)}
+.nav button.active{color:#fff;background:var(--accent);border-color:var(--accent)}
+
+/* Main */
+.main{padding:24px 32px;max-width:1400px;margin:0 auto}
+
+/* Cards grid */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:transform .2s,box-shadow .2s}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.stat-card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.stat-card .value{font-size:28px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-card .sub{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* Tables */
+.panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:24px}
+.panel-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.panel-header h2{font-size:15px;font-weight:600}
+.panel-header .count{background:var(--accent);color:#fff;font-size:11px;padding:2px 8px;border-radius:10px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px 20px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}
+td{padding:12px 20px;font-size:13px;border-bottom:1px solid rgba(42,53,80,.5)}
+tr:hover{background:rgba(99,102,241,.05)}
+.empty{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+
+/* Screenshot grid */
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;padding:16px 20px}
+.shot{border-radius:8px;overflow:hidden;border:1px solid var(--border);transition:transform .2s}
+.shot:hover{transform:scale(1.03)}
+.shot img{width:100%;height:140px;object-fit:cover;display:block}
+.shot .meta{padding:8px 10px;font-size:11px;color:var(--muted)}
+
+/* Tags */
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500}
+.tag-ok{background:rgba(16,185,129,.15);color:var(--green)}
+.tag-warn{background:rgba(245,158,11,.15);color:var(--yellow)}
+.tag-err{background:rgba(239,68,68,.15);color:var(--red)}
+
+/* Spinner */
+.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin:40px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Section visibility */
+.section{display:none}
+.section.active{display:block}
+
+/* System info */
+.info-grid{display:grid;grid-template-columns:160px 1fr;gap:8px 16px;padding:16px 20px}
+.info-grid .key{font-size:12px;color:var(--muted);text-transform:uppercase}
+.info-grid .val{font-size:13px;word-break:break-all}
+
+@media(max-width:768px){
+  .main{padding:16px}
+  .stats{grid-template-columns:1fr 1fr}
+  .header{padding:16px}
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="url(#g)" stroke-width="2"><defs><linearGradient id="g" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#a5b4fc"/><stop offset="1" stop-color="#c084fc"/></linearGradient></defs><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+  <h1>Desktop MCP</h1>
+  <span class="badge" id="statusBadge">●&nbsp;Online</span>
+  <span class="version" id="versionLabel">v0.2.0</span>
+</div>
+
+<div class="nav">
+  <button class="active" data-tab="overview">Overview</button>
+  <button data-tab="workflows">Workflows</button>
+  <button data-tab="recordings">Recordings</button>
+  <button data-tab="screenshots">Screenshots</button>
+  <button data-tab="plugins">Plugins</button>
+  <button data-tab="system">System</button>
+</div>
+
+<div class="main">
+  <!-- OVERVIEW -->
+  <div class="section active" id="sec-overview">
+    <div class="stats" id="statsGrid"></div>
+    <div class="panel">
+      <div class="panel-header"><h2>Recent Workflows</h2><span class="count" id="wfCount">0</span></div>
+      <div id="wfPreview"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- WORKFLOWS -->
+  <div class="section" id="sec-workflows">
+    <div class="panel">
+      <div class="panel-header"><h2>All Workflows</h2><span class="count" id="wfAllCount">0</span></div>
+      <div id="wfList"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- RECORDINGS -->
+  <div class="section" id="sec-recordings">
+    <div class="panel">
+      <div class="panel-header"><h2>Video Recordings</h2><span class="count" id="recCount">0</span></div>
+      <div id="recList"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- SCREENSHOTS -->
+  <div class="section" id="sec-screenshots">
+    <div class="panel">
+      <div class="panel-header"><h2>Screenshot Gallery</h2><span class="count" id="shotCount">0</span></div>
+      <div id="shotGrid" class="shots"></div>
+    </div>
+  </div>
+
+  <!-- PLUGINS -->
+  <div class="section" id="sec-plugins">
+    <div class="panel">
+      <div class="panel-header"><h2>Installed Plugins</h2><span class="count" id="plugCount">0</span></div>
+      <div id="plugList"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- SYSTEM -->
+  <div class="section" id="sec-system">
+    <div class="panel">
+      <div class="panel-header"><h2>System Information</h2></div>
+      <div id="sysInfo" class="info-grid"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+// Tab switching
+$$('.nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.nav button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    $$('.section').forEach(s => s.classList.remove('active'));
+    $(`#sec-${btn.dataset.tab}`).classList.add('active');
+  });
+});
+
+function fmtDate(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleString();
+}
+function fmtSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+async function fetchJSON(path) {
+  const r = await fetch(API + path);
+  return r.json();
+}
+
+async function loadAll() {
+  const [status, wf, rec, shots, plugs] = await Promise.all([
+    fetchJSON('/api/status'),
+    fetchJSON('/api/workflows'),
+    fetchJSON('/api/recordings'),
+    fetchJSON('/api/screenshots'),
+    fetchJSON('/api/plugins'),
+  ]);
+
+  // Stats
+  $('#statsGrid').innerHTML = [
+    {label:'Workflows',value:wf.count,sub:'saved sequences'},
+    {label:'Recordings',value:rec.count,sub:'video captures'},
+    {label:'Screenshots',value:shots.count,sub:'recent captures'},
+    {label:'Plugins',value:plugs.count,sub:'active extensions'},
+    {label:'Uptime',value:Math.round(status.uptime_s)+'s',sub:'server runtime'},
+  ].map(s=>`<div class="stat-card"><div class="label">${s.label}</div><div class="value">${s.value}</div><div class="sub">${s.sub}</div></div>`).join('');
+
+  // Workflows preview (latest 5)
+  renderWorkflows(wf, '#wfPreview', 5);
+  $('#wfCount').textContent = wf.count;
+  renderWorkflows(wf, '#wfList');
+  $('#wfAllCount').textContent = wf.count;
+
+  // Recordings
+  $('#recCount').textContent = rec.count;
+  if (!rec.recordings.length) {
+    $('#recList').innerHTML = '<div class="empty">No recordings yet</div>';
+  } else {
+    $('#recList').innerHTML = '<table><thead><tr><th>ID</th><th>Outputs</th><th>Modified</th></tr></thead><tbody>' +
+      rec.recordings.map(r => `<tr><td>${r.id}</td><td>${r.outputs.join(', ')||'—'}</td><td>${fmtDate(r.modified)}</td></tr>`).join('') +
+      '</tbody></table>';
+  }
+
+  // Screenshots
+  $('#shotCount').textContent = shots.count;
+  if (!shots.screenshots.length) {
+    $('#shotGrid').innerHTML = '<div class="empty">No screenshots yet</div>';
+  } else {
+    $('#shotGrid').innerHTML = shots.screenshots.map(s =>
+      `<div class="shot"><img src="${s.path}" alt="${s.name}" loading="lazy"><div class="meta">${s.name} · ${fmtSize(s.size_bytes)}</div></div>`
+    ).join('');
+  }
+
+  // Plugins
+  $('#plugCount').textContent = plugs.count;
+  if (!plugs.plugins.length) {
+    $('#plugList').innerHTML = '<div class="empty">No plugins installed. Drop .py files in ~/.pm/desktop-mcp/plugins/</div>';
+  } else {
+    $('#plugList').innerHTML = '<table><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>' +
+      plugs.plugins.map(p => `<tr><td><span class="tag tag-ok">✓</span> ${p.name}</td><td>${fmtSize(p.size_bytes)}</td><td>${fmtDate(p.modified)}</td></tr>`).join('') +
+      '</tbody></table>';
+  }
+
+  // System
+  $('#sysInfo').innerHTML = [
+    ['Platform', status.platform],
+    ['Python', status.python?.split(' ')[0]],
+    ['Version', status.version],
+    ['Screenshots Dir', status.dirs?.screenshots],
+    ['Workflows Dir', status.dirs?.workflows],
+    ['Recordings Dir', status.dirs?.recordings],
+    ['Plugins Dir', status.dirs?.plugins],
+  ].map(([k,v]) => `<div class="key">${k}</div><div class="val">${v||'—'}</div>`).join('');
+}
+
+function renderWorkflows(wf, target, limit) {
+  const list = limit ? wf.workflows.slice(0, limit) : wf.workflows;
+  if (!list.length) {
+    $(target).innerHTML = '<div class="empty">No workflows saved yet</div>';
+    return;
+  }
+  $(target).innerHTML = '<table><thead><tr><th>ID</th><th>Steps</th><th>Size</th><th>Modified</th></tr></thead><tbody>' +
+    list.map(w => `<tr><td>${w.id}</td><td><span class="tag tag-ok">${w.step_count} steps</span></td><td>${w.size_bytes ? fmtSize(w.size_bytes) : '—'}</td><td>${fmtDate(w.modified)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+
+loadAll();
+setInterval(loadAll, 15000);
+</script>
+</body>
+</html>

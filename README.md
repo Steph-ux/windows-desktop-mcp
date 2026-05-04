@@ -25,11 +25,20 @@ playwright install chromium
 }
 ```
 
-## Super-Tools (15)
+## Dashboard (New!)
+
+Monitor tools usage, MCP events, and capture history in real-time with the local dashboard:
+
+```bash
+desktop-mcp-dashboard
+```
+Then open `http://localhost:8080` in your browser.
+
+## Super-Tools (16)
 
 | Tool | Actions | Domain |
 |---|---|---|
-| `browser_session` | open, close, attach_cdp, profiles, presets… | Browser lifecycle |
+| `browser_session` | open, user_open, close, attach_cdp, profiles, presets… | Browser lifecycle |
 | `browser_navigate` | goto, back, forward, scroll, pages… | Navigation |
 | `browser_content` | DOM, text, eval, frames, shadow DOM… | Content |
 | `browser_interact` | click, type, fill, upload… | Interaction |
@@ -44,6 +53,7 @@ playwright install chromium
 | `system_ops` | files, processes, archives… | Operations |
 | `runtime` | health, events, status… | MCP runtime |
 | `workflow` | run, record, templates, plugins… | Automation |
+| `operator` | start, step, finish, session | Model-operated task sessions |
 
 ## Key Features
 
@@ -51,6 +61,7 @@ playwright install chromium
 - **Video Recording** — capture desktop sessions as WebM/GIF
 - **Multi-Monitor** — capture and interact across all displays
 - **Workflow Engine** — chain actions, use variables, pre-built templates
+- **Operator Sessions** — log goals, steps, risk, evidence, and outcomes
 - **Plugin System** — drop `.py` files in `~/.pm/desktop-mcp/plugins/`
 - **CDP Attach** — connect to an existing Chrome browser with your cookies
 - **Thread-Safe** — async dispatcher with `anyio.to_thread` for Playwright

@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "windows-desktop-mcp"
 version = "0.2.0"
-description = "Windows desktop and browser control MCP server — 15 super-tools for automation, OCR, Playwright, video recording, and workflows."
+description = "Windows desktop and browser control MCP server - 16 super-tools for automation, OCR, Playwright, video recording, and workflows."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Steph-ux"},
@@ -17,7 +17,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -60,10 +59,14 @@ Issues = "https://github.com/Steph-ux/windows-desktop-mcp/issues"
 
 [project.scripts]
 windows-desktop-mcp = "desktop_mcp.server:main"
+desktop-mcp-dashboard = "desktop_mcp.dashboard:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["desktop_mcp*"]
+
+[tool.setuptools.package-data]
+desktop_mcp = ["*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
