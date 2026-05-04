@@ -62,9 +62,16 @@ Then open `http://localhost:8080` in your browser.
 - **Multi-Monitor** — capture and interact across all displays
 - **Workflow Engine** — chain actions, use variables, pre-built templates
 - **Operator Sessions** — log goals, steps, risk, evidence, and outcomes
+- **Strict Non-Interactive Mode** — blocks host mouse, keyboard, focus, and default-browser actions unless the host/user explicitly confirms
 - **Plugin System** — drop `.py` files in `~/.pm/desktop-mcp/plugins/`
 - **CDP Attach** — connect to an existing Chrome browser with your cookies
 - **Thread-Safe** — async dispatcher with `anyio.to_thread` for Playwright
+
+## Host Interaction Safety
+
+Strict non-interactive mode is enabled by default. Actions that can affect the user's real desktop, cursor, keyboard focus, clipboard, or default browser are marked as `host_interactive` in `runtime(manifest)` and are blocked unless the call includes `confirmed=true` and `confirmation_source="user"` or `"host"`.
+
+Set `WINDOWS_DESKTOP_MCP_STRICT_NON_INTERACTIVE=0` only in a dedicated automation VM or throwaway desktop session.
 
 ## Workflow Templates
 

@@ -28,6 +28,37 @@ class TestDispatcher:
         result = _d(actions, "greet", name="Alice")
         assert result["ok"] is True
         assert result["msg"] == "Hi Alice"
+
+    def test_strict_non_interactive_blocks_direct_desktop_input(self):
+        """Direct mouse/keyboard dispatch should be blocked unless the host confirms."""
+        from desktop_mcp.tools.consolidated import _d
+
+        actions = {"mouse_scroll": lambda clicks: {"ok": True, "clicks": clicks}}
+
+        result = _d(actions, "mouse_scroll", tool_name="desktop_interact", clicks=-5)
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert result["phase"] == "host_interaction"
+        assert result["confirmation"]["required"] is True
+
+    def test_strict_non_interactive_allows_confirmed_host_input(self):
+        """Host/user confirmation should unlock intentional desktop input."""
+        from desktop_mcp.tools.consolidated import _d
+
+        actions = {"mouse_scroll": lambda clicks: {"ok": True, "clicks": clicks}}
+
+        result = _d(
+            actions,
+            "mouse_scroll",
+            tool_name="desktop_interact",
+            clicks=-5,
+            confirmed=True,
+            confirmation_source="user",
+        )
+
+        assert result["ok"] is True
+        assert result["clicks"] == -5
         assert "_elapsed_ms" in result
 
     def test_exception_returns_structured_error(self):
@@ -127,6 +158,17 @@ class TestRegistry:
         param_names = {param["name"] for param in action["parameters"]}
         assert action["risk"] == "medium"
         assert {"url", "wait_title_contains"} <= param_names
+
+    def test_runtime_manifest_marks_host_interactive_actions(self):
+        """The manifest should warn models before actions touch the user's host UI."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        result = runtime_tool_manifest(tool="desktop_interact")
+
+        action = result["tools"]["desktop_interact"]["actions"]["mouse_scroll"]
+        assert result["strict_non_interactive"] is True
+        assert action["host_interactive"] is True
+        assert action["requires_host_confirmation"] is True
 
     def test_runtime_manifest_unknown_tool_returns_available_tools(self):
         """Unknown manifest requests should return structured guidance."""
@@ -313,6 +355,28 @@ class TestWorkflowEngine:
         assert result["phase"] == "policy"
         assert result["blocked"] is True
         assert "not allowed" in result["reason"]
+
+    def test_workflow_act_verify_blocks_desktop_input_before_observe(self):
+        """Host-interactive actions should stop before observation or dispatch."""
+        from desktop_mcp.tools import consolidated as c
+        from desktop_mcp.tools import workflows as wf
+
+        original = c.R["desktop_interact"]
+        c.R["desktop_interact"] = ("fake desktop input", {"mouse_scroll": lambda clicks: {"ok": True}})
+        try:
+            with patch.object(wf, "workflow_observe") as observe:
+                result = wf.workflow_act_verify(
+                    tool="desktop_interact",
+                    target_action="mouse_scroll",
+                    kwargs={"clicks": -5},
+                )
+        finally:
+            c.R["desktop_interact"] = original
+
+        assert result["ok"] is False
+        assert result["blocked"] is True
+        assert result["phase"] == "host_interaction"
+        observe.assert_not_called()
 
     def test_workflow_dispatch_act_verify_uses_target_action(self):
         """act_verify should block sensitive nested actions through the dispatcher."""

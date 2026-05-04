@@ -5,7 +5,7 @@ from typing import Any
 
 from .app import mcp
 from .runtime import clear_events, recent_events, runtime_health_check, runtime_status
-from .tool_policy import classify_action_risk
+from .tool_policy import classify_action_risk, is_host_interactive_action, strict_non_interactive_enabled
 
 
 def runtime_get_status() -> dict:
@@ -45,6 +45,11 @@ def runtime_tool_manifest(tool: str | None = None, include_signatures: bool = Tr
             payload: dict[str, Any] = {
                 "doc": inspect.getdoc(fn) or "",
                 "risk": classify_action_risk(tool_name, action_name),
+                "host_interactive": is_host_interactive_action(tool_name, action_name),
+                "requires_host_confirmation": (
+                    strict_non_interactive_enabled()
+                    and is_host_interactive_action(tool_name, action_name)
+                ),
             }
             if include_signatures:
                 payload["signature"] = str(inspect.signature(fn))
@@ -63,4 +68,9 @@ def runtime_tool_manifest(tool: str | None = None, include_signatures: bool = Tr
             "actions": action_items,
         }
 
-    return {"ok": True, "tool_count": len(items), "tools": items}
+    return {
+        "ok": True,
+        "tool_count": len(items),
+        "strict_non_interactive": strict_non_interactive_enabled(),
+        "tools": items,
+    }

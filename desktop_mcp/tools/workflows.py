@@ -8,7 +8,7 @@ from typing import Any
 
 from ..paths import SCREENSHOT_DIR
 from ..runtime import record_event
-from ..tool_policy import classify_action_risk, risk_manifest
+from ..tool_policy import classify_action_risk, evaluate_host_interaction_guard, risk_manifest
 
 WORKFLOW_DIR = SCREENSHOT_DIR / "workflows"
 WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
@@ -274,6 +274,15 @@ def workflow_act_verify(
             "policy": policy,
         }
 
+    host_guard = evaluate_host_interaction_guard(
+        tool=tool,
+        action=target_action,
+        confirmed=confirmed,
+        confirmation_source=confirmation_source,
+    )
+    if not host_guard["ok"]:
+        return host_guard
+
     blocked_levels = set(require_confirmation_for or ["high", "destructive"])
     if risk in blocked_levels and not confirmed:
         return {
@@ -317,7 +326,15 @@ def workflow_act_verify(
     if not tool_entry:
         return {"ok": False, "phase": "action", "error": f"Unknown tool: {tool!r}", "available": sorted(R)}
     _doc, actions = tool_entry
-    result = _d(actions, target_action, timeout_ms=timeout_ms, **kw)
+    result = _d(
+        actions,
+        target_action,
+        tool_name=tool,
+        timeout_ms=timeout_ms,
+        _mcp_confirmed=confirmed,
+        _mcp_confirmation_source=confirmation_source,
+        **kw,
+    )
     after = workflow_observe(scope=observe_scope, include_screenshot=include_screenshot)
     verify_result = _evaluate_conditions(verification) if verification else {"ok": True, "checks": []}
     ok = bool(result.get("ok", True)) and verify_result["ok"]

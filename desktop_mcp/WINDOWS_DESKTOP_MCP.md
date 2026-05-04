@@ -121,6 +121,10 @@ Recommended loop:
 
 `workflow(act_verify)` blocks `high` and `destructive` actions unless `confirmed=true` and `confirmation_source="host"` or `"user"` are provided. Model-only confirmation is not enough for sensitive actions.
 
+Strict non-interactive mode is enabled by default through `WINDOWS_DESKTOP_MCP_STRICT_NON_INTERACTIVE=1`. The dispatcher also blocks `host_interactive` actions that can affect the user's real cursor, keyboard, focus, clipboard, window state, or default browser. This applies even when a model calls a super-tool directly instead of using `workflow(act_verify)`.
+
+To intentionally allow a host-interactive action, the call must include `confirmed=true` and `confirmation_source="host"` or `"user"`. Disable strict mode only inside a dedicated automation VM or throwaway desktop session.
+
 Use policy parameters to constrain task execution:
 
 1. `allowed_tools` and `denied_tools` restrict whole super-tools.

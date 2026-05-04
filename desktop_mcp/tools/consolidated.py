@@ -26,17 +26,33 @@ from . import operator as _op
 from . import smart_ocr as _socr
 from .. import tools_ai as _ai
 from .. import tools_runtime as _trt
+from ..tool_policy import evaluate_host_interaction_guard
 
 # ═══ SAFE DISPATCH WITH ERROR HANDLING & TIMEOUT ═══════════════════
 DEFAULT_TIMEOUT_MS = 30000
 
 
-def _d(actions, action, timeout_ms=None, **kw):
+def _d(actions, action, tool_name="", timeout_ms=None, **kw):
     """Dispatch to an action with structured error handling and optional timeout."""
     fn = actions.get(action)
     if not fn:
         return {"ok": False, "error": f"Unknown action: {action!r}",
                 "available_actions": sorted(actions.keys())}
+
+    confirmed = bool(kw.pop("_mcp_confirmed", False) or kw.get("confirmed", False))
+    confirmation_source = str(kw.pop("_mcp_confirmation_source", "") or kw.get("confirmation_source", ""))
+    if tool_name:
+        host_guard = evaluate_host_interaction_guard(
+            tool=tool_name,
+            action=action,
+            confirmed=confirmed,
+            confirmation_source=confirmation_source,
+        )
+        if not host_guard["ok"]:
+            return host_guard
+        if host_guard.get("host_interactive"):
+            kw.pop("confirmed", None)
+            kw.pop("confirmation_source", None)
 
     # Filter kwargs to match function signature
     sig = inspect.signature(fn)
@@ -375,7 +391,7 @@ for _name, (_doc, _actions) in R.items():
                 return {"ok": False, "error": f"kwargs must be a JSON object, got {type(kw).__name__}"}
             # Offload to thread so sync Playwright calls don't conflict with asyncio loop
             return await anyio.to_thread.run_sync(
-                functools.partial(_d, actions, action, timeout_ms=timeout_ms, **kw)
+                functools.partial(_d, actions, action, tool_name=name, timeout_ms=timeout_ms, **kw)
             )
         tool_fn.__name__ = name
         tool_fn.__qualname__ = name

@@ -11,6 +11,7 @@ from .browser_core import browser_availability
 from .ocr_core import ocr_availability
 from .paths import BROWSER_CAPTURE_ROOT, BROWSER_PROFILE_ROOT, MCP_LOG_PATH, RUNTIME_EVENT_LOG, ensure_runtime_dirs
 from .state import ACTION_EVENT_LOG, DESKTOP_WATCH_SESSIONS, PLAYWRIGHT_SESSIONS
+from .tool_policy import strict_non_interactive_enabled
 
 ensure_runtime_dirs()
 
@@ -76,6 +77,9 @@ def runtime_status() -> dict[str, Any]:
         "active_desktop_watch_sessions": len(DESKTOP_WATCH_SESSIONS),
         "recent_event_count": len(ACTION_EVENT_LOG),
         "event_log_path": str(RUNTIME_EVENT_LOG),
+        "policy": {
+            "strict_non_interactive": strict_non_interactive_enabled(),
+        },
     }
 
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
 RISK_LEVELS = ("read", "low", "medium", "high", "destructive")
+STRICT_NON_INTERACTIVE_ENV = "WINDOWS_DESKTOP_MCP_STRICT_NON_INTERACTIVE"
+CONFIRMATION_SOURCES = ("host", "user")
 
 _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("system_ops", "delete"): "destructive",
@@ -25,6 +28,7 @@ _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("system_info", "lock"): "high",
     ("system_info", "wallpaper"): "medium",
     ("desktop_window", "close"): "high",
+    ("desktop_window", "focus"): "medium",
     ("desktop_window", "resize"): "medium",
     ("desktop_window", "minimize"): "medium",
     ("desktop_window", "maximize"): "medium",
@@ -80,6 +84,32 @@ _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("workflow", "delete"): "medium",
 }
 
+_HOST_INTERACTIVE_BY_TOOL_ACTION: set[tuple[str, str]] = {
+    ("browser_session", "user_open"),
+    ("desktop_window", "close"),
+    ("desktop_window", "focus"),
+    ("desktop_window", "maximize"),
+    ("desktop_window", "minimize"),
+    ("desktop_window", "resize"),
+    ("desktop_interact", "click"),
+    ("desktop_interact", "double_click"),
+    ("desktop_interact", "right_click"),
+    ("desktop_interact", "click_text"),
+    ("desktop_interact", "click_ocr"),
+    ("desktop_interact", "click_ui"),
+    ("desktop_interact", "click_intent"),
+    ("desktop_interact", "click_visible"),
+    ("desktop_interact", "mouse_move"),
+    ("desktop_interact", "mouse_drag"),
+    ("desktop_interact", "mouse_scroll"),
+    ("desktop_interact", "kb_type"),
+    ("desktop_interact", "kb_unicode"),
+    ("desktop_interact", "kb_press"),
+    ("desktop_interact", "kb_hotkey"),
+    ("desktop_interact", "clip_set"),
+    ("desktop_interact", "macro_replay"),
+}
+
 _READ_TOOLS = {
     "browser_content",
     "browser_observe",
@@ -89,6 +119,12 @@ _READ_TOOLS = {
     "desktop_window",
     "runtime",
 }
+
+
+def strict_non_interactive_enabled() -> bool:
+    """Return whether host-interactive actions require explicit host/user confirmation."""
+    value = os.getenv(STRICT_NON_INTERACTIVE_ENV, "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def classify_action_risk(tool: str, action: str) -> str:
@@ -108,6 +144,59 @@ def classify_action_risk(tool: str, action: str) -> str:
     return "medium"
 
 
+def is_host_interactive_action(tool: str, action: str) -> bool:
+    """Return whether an action can steal focus, move the cursor, type, or mutate host UI state."""
+    key = ((tool or "").strip(), (action or "").strip())
+    return key in _HOST_INTERACTIVE_BY_TOOL_ACTION
+
+
+def is_host_confirmation(source: str) -> bool:
+    return (source or "").strip().lower() in CONFIRMATION_SOURCES
+
+
+def evaluate_host_interaction_guard(
+    tool: str,
+    action: str,
+    confirmed: bool = False,
+    confirmation_source: str = "",
+    strict: bool | None = None,
+) -> dict[str, Any]:
+    """Block host-interactive actions unless strict mode is disabled or host/user confirms."""
+    enabled = strict_non_interactive_enabled() if strict is None else bool(strict)
+    host_interactive = is_host_interactive_action(tool, action)
+    if not enabled or not host_interactive:
+        return {
+            "ok": True,
+            "strict_non_interactive": enabled,
+            "host_interactive": host_interactive,
+        }
+    confirmation = {
+        "confirmed": bool(confirmed),
+        "source": confirmation_source or None,
+        "required": True,
+        "allowed_sources": list(CONFIRMATION_SOURCES),
+    }
+    if confirmed and is_host_confirmation(confirmation_source):
+        return {
+            "ok": True,
+            "strict_non_interactive": enabled,
+            "host_interactive": True,
+            "confirmation": confirmation,
+        }
+    return {
+        "ok": False,
+        "blocked": True,
+        "phase": "host_interaction",
+        "risk": classify_action_risk(tool, action),
+        "reason": "Strict non-interactive mode blocks host UI input/focus actions without host/user confirmation.",
+        "tool": tool,
+        "action": action,
+        "strict_non_interactive": enabled,
+        "host_interactive": True,
+        "confirmation": confirmation,
+    }
+
+
 def risk_manifest(actions_by_tool: dict[str, tuple[str, dict[str, Any]]]) -> dict[str, Any]:
     """Return risk metadata for every consolidated action."""
     tools: dict[str, Any] = {}
@@ -115,8 +204,17 @@ def risk_manifest(actions_by_tool: dict[str, tuple[str, dict[str, Any]]]) -> dic
         tools[tool_name] = {
             "doc": doc,
             "actions": {
-                action_name: {"risk": classify_action_risk(tool_name, action_name)}
+                action_name: {
+                    "risk": classify_action_risk(tool_name, action_name),
+                    "host_interactive": is_host_interactive_action(tool_name, action_name),
+                }
                 for action_name in sorted(actions)
             },
         }
-    return {"ok": True, "levels": list(RISK_LEVELS), "tools": tools}
+    return {
+        "ok": True,
+        "levels": list(RISK_LEVELS),
+        "strict_non_interactive": strict_non_interactive_enabled(),
+        "host_confirmation_sources": list(CONFIRMATION_SOURCES),
+        "tools": tools,
+    }
