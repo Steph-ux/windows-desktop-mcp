@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 
 class CdpSession:
@@ -94,6 +94,19 @@ def select_cdp_page_target(endpoint: str, preferred_url: str = "", page_id: str 
     return min(pages, key=lambda target: _target_priority(target, preferred_url=preferred_url, page_id=page_id))
 
 
+def cdp_create_page_target(endpoint: str, url: str = "about:blank", timeout: float = 5.0) -> dict[str, Any]:
+    target_url = str(url or "about:blank")
+    request_url = f"{endpoint.rstrip('/')}/json/new?{quote(target_url, safe='')}"
+    request = urllib.request.Request(request_url, method="PUT")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"CDP create target at {endpoint!r} returned an unexpected payload.")
+    if not payload.get("id") or not payload.get("webSocketDebuggerUrl"):
+        raise RuntimeError(f"CDP create target at {endpoint!r} did not return a debuggable page target.")
+    return payload
+
+
 def js_call(function_source: str, *args: Any) -> str:
     encoded_args = ", ".join(json.dumps(arg) for arg in args)
     return f"({function_source})({encoded_args})"
@@ -110,15 +123,26 @@ def cdp_navigate(
     preferred_url: str = "",
     page_id: str | None = None,
     wait_ms: int = 10000,
+    new_tab_if_needed: bool = False,
 ) -> dict[str, Any]:
-    selected = select_cdp_page_target(endpoint, preferred_url=preferred_url or url, page_id=page_id)
+    created_target = False
+    try:
+        selected = select_cdp_page_target(endpoint, preferred_url=preferred_url or url, page_id=page_id)
+    except RuntimeError:
+        if not new_tab_if_needed or not url:
+            raise
+        selected = cdp_create_page_target(endpoint, url=url, timeout=max(int(wait_ms), 1000) / 1000)
+        created_target = True
+    if new_tab_if_needed and url and not created_target and not _target_matches_url_context(selected, url):
+        selected = cdp_create_page_target(endpoint, url=url, timeout=max(int(wait_ms), 1000) / 1000)
+        created_target = True
     target_id = str(selected.get("id") or page_id or "")
     ws_url = str(selected.get("webSocketDebuggerUrl") or "")
     if not ws_url:
         raise RuntimeError(f"Selected CDP target at {endpoint!r} has no webSocketDebuggerUrl.")
     started_at = time.monotonic()
     with open_cdp_session(ws_url, timeout=max(int(wait_ms), 1000) / 1000) as cdp:
-        if url and _normalize_url_for_match(str(selected.get("url") or "")) != _normalize_url_for_match(url):
+        if not created_target and url and _normalize_url_for_match(str(selected.get("url") or "")) != _normalize_url_for_match(url):
             cdp.call("Page.navigate", {"url": url})
         page_info = _wait_for_page(cdp, url, wait_ms=wait_ms)
     return {
@@ -131,6 +155,7 @@ def cdp_navigate(
         "cdp_endpoint": endpoint.rstrip("/"),
         "cdp_direct": True,
         "navigated": _normalize_url_for_match(page_info.get("href") or "") == _normalize_url_for_match(url) if url else True,
+        "created_target": created_target,
         "navigation_waited_ms": int((time.monotonic() - started_at) * 1000),
     }
 
@@ -170,6 +195,19 @@ def _target_priority(target: dict[str, Any], preferred_url: str = "", page_id: s
     return 20
 
 
+def _target_matches_url_context(target: dict[str, Any], url: str) -> bool:
+    target_url = str(target.get("url") or "")
+    if not target_url or target_url == "about:blank":
+        return True
+    normalized_target = _normalize_url_for_match(target_url)
+    normalized_url = _normalize_url_for_match(url)
+    if normalized_target and normalized_target == normalized_url:
+        return True
+    target_parts = urlparse(target_url)
+    url_parts = urlparse(url)
+    return same_social_host(target_parts.hostname, url_parts.hostname)
+
+
 def _normalize_url_for_match(value: str) -> str:
     if not value:
         return ""
@@ -203,6 +241,7 @@ def same_social_host(left: str | None, right: str | None) -> bool:
 
 __all__ = [
     "CdpSession",
+    "cdp_create_page_target",
     "cdp_navigate",
     "cdp_page_info",
     "cdp_targets",

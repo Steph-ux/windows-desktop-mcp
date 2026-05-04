@@ -89,7 +89,12 @@ def _cdp_endpoint(started: dict[str, Any]) -> str:
     return str(started.get("cdp_endpoint") or manifest.get("cdp_endpoint") or "").strip().rstrip("/")
 
 
-def _navigate_started_cdp(started: dict[str, Any], target_url: str, wait_until: str) -> tuple[dict[str, Any], bool, str | None]:
+def _navigate_started_cdp(
+    started: dict[str, Any],
+    target_url: str,
+    wait_until: str,
+    new_tab_if_needed: bool = False,
+) -> tuple[dict[str, Any], bool, str | None]:
     endpoint = _cdp_endpoint(started)
     if not target_url or not endpoint:
         return started, bool(target_url and started.get("url") == target_url), None
@@ -97,13 +102,16 @@ def _navigate_started_cdp(started: dict[str, Any], target_url: str, wait_until: 
         started["cdp_direct"] = True
         return started, True, None
     try:
-        navigation = cdp_navigate(
-            endpoint=endpoint,
-            url=target_url,
-            preferred_url=str(started.get("url") or target_url),
-            page_id=started.get("cdp_target_id"),
-            wait_ms=10000 if wait_until else 5000,
-        )
+        navigate_kwargs = {
+            "endpoint": endpoint,
+            "url": target_url,
+            "preferred_url": str(started.get("url") or target_url),
+            "page_id": started.get("cdp_target_id"),
+            "wait_ms": 10000 if wait_until else 5000,
+        }
+        if new_tab_if_needed:
+            navigate_kwargs["new_tab_if_needed"] = True
+        navigation = cdp_navigate(**navigate_kwargs)
         started.update({key: value for key, value in navigation.items() if value is not None})
         started["cdp_direct"] = True
         return started, bool(navigation.get("navigated")), None
@@ -205,6 +213,7 @@ def agent_browser_start(
     browser: str = "chrome",
     browser_engine: str = "playwright",
     debug_port: int = 9333,
+    new_tab_if_needed: bool = False,
     startup_wait_ms: int = 4000,
     headless: bool = True,
     width: int | str = "auto",
@@ -283,7 +292,12 @@ def agent_browser_start(
                 init_script_paths=init_script_paths,
                 grant_permissions=grant_permissions,
             )
-        started, navigated, navigation_error = _navigate_started_cdp(started, target_url, wait_until)
+        started, navigated, navigation_error = _navigate_started_cdp(
+            started,
+            target_url,
+            wait_until,
+            new_tab_if_needed=new_tab_if_needed,
+        )
         record_event(
             "agent_browser_start",
             profile_name=resolved_profile,
@@ -292,6 +306,7 @@ def agent_browser_start(
             url=target_url,
             browser_engine="cdp",
             cdp_reattached=cdp_reattached,
+            new_tab_if_needed=bool(new_tab_if_needed),
             navigation_error=navigation_error,
             headless=False,
         )
@@ -309,6 +324,8 @@ def agent_browser_start(
             "browser_engine": "cdp",
             "cdp_direct": True,
             "cdp_reattached": cdp_reattached,
+            "new_tab_if_needed": bool(new_tab_if_needed),
+            "created_target": bool(started.get("created_target")),
             "host_interactive": False,
             "uses_host_mouse": False,
             "uses_host_keyboard": False,

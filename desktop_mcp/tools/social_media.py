@@ -301,6 +301,8 @@ _DETAIL_EXTRACTORS = {
 _DEFAULT_EXTRACT_WAIT_MS = 10000
 _DEFAULT_EXTRACT_POLL_MS = 250
 _DEFAULT_SCROLL_PAUSE_MS = 500
+_DEFAULT_SOCIAL_CDP_PROFILE = "agent-social-cdp"
+_DEFAULT_SOCIAL_CDP_INSTANCE = "agent-social-cdp"
 
 _SCROLL_SCRIPT = r"""
 () => {
@@ -356,6 +358,23 @@ def _platform(platform: str) -> str:
     if key not in _SUPPORTED_PLATFORMS:
         raise ValueError(f"Unsupported platform: {platform!r}. Use one of: {', '.join(sorted(_SUPPORTED_PLATFORMS))}.")
     return key
+
+
+def _is_cdp_engine(browser_engine: str) -> bool:
+    return str(browser_engine or "").strip().lower() == "cdp"
+
+
+def _resolve_social_browser_identity(
+    profile_name: str,
+    instance_name: str,
+    browser_engine: str,
+) -> tuple[str, str]:
+    if not _is_cdp_engine(browser_engine):
+        return profile_name, instance_name
+    return (
+        str(profile_name or "").strip() or _DEFAULT_SOCIAL_CDP_PROFILE,
+        str(instance_name or "").strip() or _DEFAULT_SOCIAL_CDP_INSTANCE,
+    )
 
 
 def _query(value: str) -> str:
@@ -664,6 +683,7 @@ def _extract_detail_from_cdp_endpoint(
     target_url: str,
     wait_ms: int,
     poll_ms: int = _DEFAULT_EXTRACT_POLL_MS,
+    new_tab_if_needed: bool = False,
 ) -> dict[str, Any]:
     navigation = cdp_navigate(
         endpoint=endpoint,
@@ -671,6 +691,7 @@ def _extract_detail_from_cdp_endpoint(
         preferred_url=target_url,
         page_id=page_id,
         wait_ms=wait_ms,
+        new_tab_if_needed=new_tab_if_needed,
     )
     selected = _select_cdp_page_target(endpoint, preferred_url=navigation.get("url") or target_url, page_id=navigation.get("cdp_target_id"))
     target_id = str(selected.get("id") or navigation.get("cdp_target_id") or page_id or "")
@@ -901,6 +922,7 @@ def social_detail(
     browser_stop: dict[str, Any] | None = None
     resolved_session_id = str(session_id or "")
     resolved_page_id = page_id
+    resolved_profile_name, resolved_instance_name = _resolve_social_browser_identity(profile_name, instance_name, browser_engine)
     endpoint = ""
     if resolved_session_id:
         snapshot = _playwright_session_snapshot(resolved_session_id)
@@ -909,11 +931,12 @@ def social_detail(
         started = agent_browser_start(
             platform=target,
             url=target_url,
-            profile_name=profile_name,
-            instance_name=instance_name,
+            profile_name=resolved_profile_name,
+            instance_name=resolved_instance_name,
             browser=browser,
             browser_engine=browser_engine,
             debug_port=debug_port,
+            new_tab_if_needed=_is_cdp_engine(browser_engine),
             headless=False,
             wait_until="domcontentloaded",
         )
@@ -939,6 +962,7 @@ def social_detail(
                 endpoint=endpoint,
                 target_url=target_url,
                 wait_ms=wait_ms,
+                new_tab_if_needed=_is_cdp_engine(browser_engine),
             )
         else:
             extracted = _extract_detail_from_playwright(
@@ -949,8 +973,8 @@ def social_detail(
                 wait_ms=wait_ms,
             )
     finally:
-        if not keep_open and (started or instance_name):
-            browser_stop = agent_browser_stop(instance_name=(started or {}).get("instance_name") or instance_name, platform=target)
+        if not keep_open and (started or resolved_instance_name):
+            browser_stop = agent_browser_stop(instance_name=(started or {}).get("instance_name") or resolved_instance_name, platform=target)
     return {
         **extracted,
         "ok": bool(extracted.get("ok", True)),
@@ -1008,7 +1032,7 @@ def social_search(
     profile_name: str = "",
     instance_name: str = "",
     browser: str = "chrome",
-    browser_engine: str = "playwright",
+    browser_engine: str = "cdp",
     debug_port: int = 9333,
     headless: bool = True,
     width: int | str = "auto",
@@ -1025,15 +1049,17 @@ def social_search(
     target = _platform(platform)
     safe_limit = max(1, min(int(limit), 100))
     resolved_scroll_steps = _resolve_scroll_steps(safe_limit, scroll_steps)
+    resolved_profile_name, resolved_instance_name = _resolve_social_browser_identity(profile_name, instance_name, browser_engine)
     url_info = social_platform_url(platform=target, query=query)
     started = agent_browser_start(
         platform=target,
         url=url_info["url"],
-        profile_name=profile_name,
-        instance_name=instance_name,
+        profile_name=resolved_profile_name,
+        instance_name=resolved_instance_name,
         browser=browser,
         browser_engine=browser_engine,
         debug_port=debug_port,
+        new_tab_if_needed=_is_cdp_engine(browser_engine),
         headless=headless,
         width=width,
         height=height,
@@ -1084,8 +1110,8 @@ def social_search(
                 session_id=started["session_id"],
                 page_id=extracted.get("page_id") or started.get("page_id"),
                 detail_limit=detail_limit,
-                profile_name=profile_name,
-                instance_name=started.get("instance_name") or instance_name,
+                profile_name=resolved_profile_name,
+                instance_name=started.get("instance_name") or resolved_instance_name,
                 browser=browser,
                 browser_engine=browser_engine,
                 debug_port=debug_port,
@@ -1095,7 +1121,7 @@ def social_search(
             extracted["detail_limit"] = max(int(detail_limit), 0)
     finally:
         if not keep_open:
-            browser_stop = agent_browser_stop(instance_name=started.get("instance_name") or instance_name, platform=target)
+            browser_stop = agent_browser_stop(instance_name=started.get("instance_name") or resolved_instance_name, platform=target)
     return {
         **extracted,
         "ok": bool(extracted.get("ok", True)),

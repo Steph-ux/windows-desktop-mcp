@@ -927,6 +927,58 @@ class TestAgentBrowser:
         )
         browser_navigate.assert_not_called()
 
+    def test_agent_browser_start_cdp_can_request_new_tab_for_new_host(self):
+        """CDP start should expose a multi-tab mode for shared social browser instances."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        target_url = "https://www.youtube.com/results?search_query=codex"
+        endpoint = {"endpoint": "http://127.0.0.1:9333", "port": 9333, "targets": []}
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-cdp"}):
+            with patch.object(ab._bs, "browser_get_instance", side_effect=ValueError("missing")):
+                with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 1, "endpoints": [endpoint]}):
+                    with patch.object(ab._bs, "browser_attach_existing", return_value={
+                        "ok": True,
+                        "session_id": "s1",
+                        "page_id": "x-tab",
+                        "url": "https://x.com/search?q=codex",
+                        "profile_name": "agent-social-cdp",
+                        "instance_name": "agent-social-cdp",
+                        "cdp_endpoint": "http://127.0.0.1:9333",
+                        "attached": True,
+                        "headless": False,
+                    }):
+                        with patch.object(ab, "cdp_navigate", return_value={
+                            "ok": True,
+                            "page_id": "youtube-tab",
+                            "cdp_target_id": "youtube-tab",
+                            "url": target_url,
+                            "title": "codex - YouTube",
+                            "cdp_direct": True,
+                            "navigated": True,
+                            "created_target": True,
+                        }) as navigate:
+                            result = ab.agent_browser_start(
+                                platform="youtube",
+                                url=target_url,
+                                profile_name="agent-social-cdp",
+                                instance_name="agent-social-cdp",
+                                browser_engine="cdp",
+                                debug_port=9333,
+                                new_tab_if_needed=True,
+                            )
+
+        assert result["ok"] is True
+        assert result["created_target"] is True
+        assert result["new_tab_if_needed"] is True
+        navigate.assert_called_once_with(
+            endpoint="http://127.0.0.1:9333",
+            url=target_url,
+            preferred_url="https://x.com/search?q=codex",
+            page_id=None,
+            wait_ms=10000,
+            new_tab_if_needed=True,
+        )
+
     def test_agent_browser_start_cdp_returns_structured_navigation_timeout(self):
         """Warm CDP navigation timeouts should not make the agent browser unusable."""
         from desktop_mcp.tools import agent_browser as ab
@@ -1328,6 +1380,54 @@ class TestSocialMediaReadOnly:
 
         assert selected["id"] == "search"
 
+    def test_cdp_navigate_creates_new_page_when_no_same_host_target_exists(self):
+        """Shared social CDP should add a tab for a new platform instead of replacing another platform tab."""
+        from desktop_mcp import cdp_client
+
+        class FakeCdp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def call(self, method, params=None):
+                raise AssertionError(f"unexpected CDP call: {method}")
+
+        with patch.object(cdp_client, "select_cdp_page_target", return_value={
+            "id": "x-tab",
+            "type": "page",
+            "url": "https://x.com/search?q=codex",
+            "webSocketDebuggerUrl": "ws://x-tab",
+        }):
+            with patch.object(cdp_client, "cdp_create_page_target", return_value={
+                "id": "youtube-tab",
+                "type": "page",
+                "url": "https://www.youtube.com/results?search_query=codex",
+                "webSocketDebuggerUrl": "ws://youtube-tab",
+            }) as create:
+                with patch.object(cdp_client, "open_cdp_session", return_value=FakeCdp()):
+                    with patch.object(cdp_client, "_wait_for_page", return_value={
+                        "href": "https://www.youtube.com/results?search_query=codex",
+                        "title": "codex - YouTube",
+                        "ready": "complete",
+                    }):
+                        result = cdp_client.cdp_navigate(
+                            endpoint="http://127.0.0.1:9333",
+                            url="https://www.youtube.com/results?search_query=codex",
+                            preferred_url="https://www.youtube.com/results?search_query=codex",
+                            new_tab_if_needed=True,
+                        )
+
+        assert result["ok"] is True
+        assert result["created_target"] is True
+        assert result["cdp_target_id"] == "youtube-tab"
+        create.assert_called_once_with(
+            "http://127.0.0.1:9333",
+            url="https://www.youtube.com/results?search_query=codex",
+            timeout=10.0,
+        )
+
     def test_social_detail_x_article_uses_full_article_text_when_card_text_is_empty(self):
         """X Article detail should preserve the full article body when tweetText is empty."""
         from desktop_mcp.tools import social_media as sm
@@ -1641,6 +1741,41 @@ class TestSocialMediaReadOnly:
         assert start.call_args.kwargs["profile_name"] == "agent-social-x-cdp"
         assert extract.call_args.kwargs["endpoint"] == "http://127.0.0.1:9333"
         assert extract.call_args.kwargs["target_url"] == "https://x.com/search?q=codex&src=typed_query&f=top"
+
+    def test_social_search_defaults_to_shared_cdp_multi_tab_browser(self):
+        """Social CDP defaults should reuse one browser profile and create host-specific tabs."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "youtube-tab",
+            "browser_context": "agent_dedicated",
+            "automation": "cdp",
+            "host_interactive": False,
+            "profile_name": "agent-social-cdp",
+            "instance_name": "agent-social-cdp",
+            "cdp_endpoint": "http://127.0.0.1:9333",
+            "url": "https://www.youtube.com/results?search_query=codex",
+        }) as start:
+            with patch.object(sm, "_extract_from_cdp_endpoint", return_value={
+                "ok": True,
+                "platform": "youtube",
+                "extraction_method": "dom",
+                "automation": "cdp",
+                "cdp_direct": True,
+                "items": [],
+                "item_count": 0,
+            }):
+                result = sm.social_search(platform="youtube", query="codex", limit=5)
+
+        assert result["ok"] is True
+        assert result["automation"] == "cdp"
+        assert start.call_args.kwargs["browser_engine"] == "cdp"
+        assert start.call_args.kwargs["profile_name"] == "agent-social-cdp"
+        assert start.call_args.kwargs["instance_name"] == "agent-social-cdp"
+        assert start.call_args.kwargs["debug_port"] == 9333
+        assert start.call_args.kwargs["new_tab_if_needed"] is True
 
     def test_social_search_include_details_enriches_only_ranked_detail_limit(self):
         """Search should keep details opt-in and enrich only the top ranked results."""
