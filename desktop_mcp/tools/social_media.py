@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 import unicodedata
 from typing import Any
-from urllib.parse import quote_plus
+import urllib.request
+from urllib.parse import quote_plus, urlparse
 
 from ..browser_core import get_playwright_page
 from ..runtime import record_event
 from ..state import PLAYWRIGHT_SESSIONS, PLAYWRIGHT_SESSIONS_LOCK
-from . import browser_sessions as _bs
 from .agent_browser import agent_browser_start, agent_browser_stop
 
 _PLATFORM_ALIASES = {
@@ -201,6 +202,67 @@ def _run_browser_call(fn, /, *args, **kwargs):
         return executor.submit(lambda: fn(*args, **kwargs)).result()
 
 
+class _CdpSession:
+    def __init__(self, ws_url: str, timeout: float = 10.0):
+        self.ws_url = ws_url
+        self.timeout = timeout
+        self._ws = None
+        self._message_id = 0
+
+    def __enter__(self):
+        try:
+            import websocket
+        except ImportError as exc:
+            raise RuntimeError("websocket-client is required for direct CDP social extraction.") from exc
+        self._ws = websocket.create_connection(self.ws_url, timeout=self.timeout)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            finally:
+                self._ws = None
+        return False
+
+    def evaluate(self, expression: str, timeout: float | None = None) -> Any:
+        if self._ws is None:
+            raise RuntimeError("CDP session is not connected.")
+        self._message_id += 1
+        message_id = self._message_id
+        if timeout is not None and hasattr(self._ws, "settimeout"):
+            self._ws.settimeout(timeout)
+        self._ws.send(json.dumps({
+            "id": message_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": expression,
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+        }))
+        deadline = time.monotonic() + max(float(timeout if timeout is not None else self.timeout), 0.1)
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Timed out waiting for CDP Runtime.evaluate response.")
+            payload = json.loads(self._ws.recv())
+            if payload.get("id") != message_id:
+                continue
+            if payload.get("error"):
+                error = payload["error"]
+                raise RuntimeError(f"CDP evaluate failed: {error.get('message') or error}")
+            result = payload.get("result") or {}
+            if result.get("exceptionDetails"):
+                text = result["exceptionDetails"].get("text") or "JavaScript exception"
+                raise RuntimeError(f"CDP evaluate exception: {text}")
+            value = (result.get("result") or {}).get("value")
+            return value
+
+
+def _open_cdp_session(ws_url: str, timeout: float = 10.0) -> _CdpSession:
+    return _CdpSession(ws_url=ws_url, timeout=timeout)
+
+
 def _platform(platform: str) -> str:
     key = str(platform or "").strip().lower().replace(" ", "_")
     key = _PLATFORM_ALIASES.get(key, key)
@@ -250,6 +312,92 @@ def social_supported_platforms() -> dict[str, Any]:
     }
 
 
+def _cdp_endpoint(started_or_session: dict[str, Any]) -> str:
+    manifest = started_or_session.get("manifest") if isinstance(started_or_session.get("manifest"), dict) else {}
+    return str(started_or_session.get("cdp_endpoint") or manifest.get("cdp_endpoint") or "").strip().rstrip("/")
+
+
+def _cdp_targets(endpoint: str, timeout: float = 5.0) -> list[dict[str, Any]]:
+    url = f"{endpoint.rstrip('/')}/json/list"
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+
+def _target_priority(target: dict[str, Any], preferred_url: str = "", page_id: str | None = None) -> int:
+    target_id = str(target.get("id") or "")
+    target_url = str(target.get("url") or "")
+    if page_id and target_id == str(page_id):
+        return 0
+    if not preferred_url:
+        return 10
+    normalized_target = _normalize_url_for_match(target_url)
+    normalized_preferred = _normalize_url_for_match(preferred_url)
+    if normalized_target and normalized_target == normalized_preferred:
+        return 1
+    target_parts = urlparse(target_url)
+    preferred_parts = urlparse(preferred_url)
+    if _same_social_host(target_parts.hostname, preferred_parts.hostname):
+        if target_parts.path == preferred_parts.path:
+            return 2
+        return 3
+    return 20
+
+
+def _select_cdp_page_target(endpoint: str, preferred_url: str = "", page_id: str | None = None) -> dict[str, Any]:
+    targets = _cdp_targets(endpoint)
+    pages = [
+        target for target in targets
+        if target.get("type") == "page"
+        and target.get("webSocketDebuggerUrl")
+        and not str(target.get("url") or "").startswith(("devtools://", "chrome://", "edge://"))
+    ]
+    if not pages:
+        raise RuntimeError(f"No debuggable page target found at {endpoint!r}.")
+    return min(pages, key=lambda target: _target_priority(target, preferred_url=preferred_url, page_id=page_id))
+
+
+def _normalize_url_for_match(value: str) -> str:
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    query = parsed.query
+    return f"{parsed.scheme.lower()}://{host}{path}?{query}" if query else f"{parsed.scheme.lower()}://{host}{path}"
+
+
+def _same_social_host(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    aliases = {
+        "twitter.com": "x.com",
+        "www.twitter.com": "x.com",
+        "www.x.com": "x.com",
+        "m.x.com": "x.com",
+        "youtu.be": "youtube.com",
+        "www.youtube.com": "youtube.com",
+        "m.youtube.com": "youtube.com",
+        "studio.youtube.com": "studio.youtube.com",
+        "www.tiktok.com": "tiktok.com",
+        "m.tiktok.com": "tiktok.com",
+        "www.instagram.com": "instagram.com",
+    }
+    left_key = aliases.get(left.lower(), left.lower())
+    right_key = aliases.get(right.lower(), right.lower())
+    return left_key == right_key
+
+
+def _js_call(function_source: str, *args: Any) -> str:
+    encoded_args = ", ".join(json.dumps(arg) for arg in args)
+    return f"({function_source})({encoded_args})"
+
+
+def _cdp_page_info(cdp: Any) -> dict[str, Any]:
+    value = cdp.evaluate("(() => ({ href: String(location.href), title: String(document.title || '') }))()")
+    return value if isinstance(value, dict) else {}
+
+
 def social_extract(
     platform: str,
     session_id: str,
@@ -265,6 +413,25 @@ def social_extract(
     target = _platform(platform)
     safe_limit = max(1, min(int(limit), 100))
     snapshot = _playwright_session_snapshot(session_id)
+    direct_cdp_error: Exception | None = None
+    endpoint = _cdp_endpoint(snapshot)
+    if endpoint:
+        try:
+            return _extract_from_cdp_endpoint(
+                target=target,
+                session_id=session_id,
+                page_id=page_id,
+                endpoint=endpoint,
+                target_url=str(snapshot.get("url") or ""),
+                safe_limit=safe_limit,
+                wait_ms=wait_ms,
+                poll_ms=poll_ms,
+                scroll_steps=scroll_steps,
+                scroll_pause_ms=scroll_pause_ms,
+                rank=rank,
+            )
+        except Exception as exc:
+            direct_cdp_error = exc
     try:
         session, resolved_page_id, page = _run_browser_call(get_playwright_page, session_id, page_id=page_id)
         return _extract_from_page(
@@ -281,7 +448,7 @@ def social_extract(
             automation="cdp" if session.get("cdp_endpoint") else "playwright",
         )
     except Exception as exc:
-        if not _is_stale_cdp_thread_error(exc) or not snapshot.get("cdp_endpoint"):
+        if not _is_stale_cdp_thread_error(exc) or not endpoint:
             raise
         return _extract_from_reattached_cdp(
             target=target,
@@ -294,6 +461,7 @@ def social_extract(
             scroll_pause_ms=scroll_pause_ms,
             rank=rank,
             snapshot=snapshot,
+            direct_cdp_error=direct_cdp_error,
         )
 
 
@@ -352,6 +520,28 @@ def _evaluate_items_with_wait(
     scroll_steps: int,
     scroll_pause_ms: int,
 ) -> tuple[list[dict[str, Any]], int, int, int]:
+    return _evaluate_items_with_wait_from_evaluator(
+        evaluate_items=lambda script, limit: _run_browser_call(page.evaluate, script, limit),
+        scroll=lambda: _scroll_page(page),
+        target=target,
+        safe_limit=safe_limit,
+        wait_ms=wait_ms,
+        poll_ms=poll_ms,
+        scroll_steps=scroll_steps,
+        scroll_pause_ms=scroll_pause_ms,
+    )
+
+
+def _evaluate_items_with_wait_from_evaluator(
+    evaluate_items: Any,
+    scroll: Any,
+    target: str,
+    safe_limit: int,
+    wait_ms: int,
+    poll_ms: int,
+    scroll_steps: int,
+    scroll_pause_ms: int,
+) -> tuple[list[dict[str, Any]], int, int, int]:
     script = _EXTRACTORS[target]
     deadline = time.monotonic() + max(int(wait_ms), 0) / 1000
     poll_seconds = max(int(poll_ms), 0) / 1000
@@ -362,7 +552,7 @@ def _evaluate_items_with_wait(
 
     while True:
         attempts += 1
-        raw_items = _run_browser_call(page.evaluate, script, safe_limit)
+        raw_items = evaluate_items(script, safe_limit)
         items = _merge_items(items, _normalize_items(raw_items, target, safe_limit), safe_limit)
         if items or time.monotonic() >= deadline:
             break
@@ -373,13 +563,13 @@ def _evaluate_items_with_wait(
     for _ in range(max(int(scroll_steps), 0)):
         if len(items) >= safe_limit:
             break
-        scroll_result = _scroll_page(page)
+        scroll_result = scroll()
         scrolls_performed += 1
         pause_seconds = max(int(scroll_pause_ms), 0) / 1000
         if pause_seconds:
             time.sleep(pause_seconds)
         attempts += 1
-        raw_items = _run_browser_call(page.evaluate, script, safe_limit)
+        raw_items = evaluate_items(script, safe_limit)
         before_count = len(items)
         items = _merge_items(items, _normalize_items(raw_items, target, safe_limit), safe_limit)
         if len(items) == before_count and _scroll_is_exhausted(scroll_result):
@@ -394,6 +584,70 @@ def _scroll_page(page: Any) -> dict[str, Any]:
     except TypeError:
         result = _run_browser_call(page.evaluate, _SCROLL_SCRIPT, None)
     return result if isinstance(result, dict) else {}
+
+
+def _scroll_cdp(cdp: Any) -> dict[str, Any]:
+    result = cdp.evaluate(_js_call(_SCROLL_SCRIPT))
+    return result if isinstance(result, dict) else {}
+
+
+def _extract_from_cdp_endpoint(
+    target: str,
+    session_id: str,
+    page_id: str | None,
+    endpoint: str,
+    target_url: str,
+    safe_limit: int,
+    wait_ms: int,
+    poll_ms: int,
+    scroll_steps: int,
+    scroll_pause_ms: int,
+    rank: bool,
+) -> dict[str, Any]:
+    selected = _select_cdp_page_target(endpoint, preferred_url=target_url, page_id=page_id)
+    target_id = str(selected.get("id") or page_id or "")
+    ws_url = str(selected.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise RuntimeError(f"Selected CDP target at {endpoint!r} has no webSocketDebuggerUrl.")
+    with _open_cdp_session(ws_url) as cdp:
+        page_info = _cdp_page_info(cdp)
+        items, attempts, waited_ms, scrolls_performed = _evaluate_items_with_wait_from_evaluator(
+            evaluate_items=lambda script, limit: cdp.evaluate(_js_call(script, limit)),
+            scroll=lambda: _scroll_cdp(cdp),
+            target=target,
+            safe_limit=safe_limit,
+            wait_ms=wait_ms,
+            poll_ms=poll_ms,
+            scroll_steps=scroll_steps,
+            scroll_pause_ms=scroll_pause_ms,
+        )
+    if rank:
+        items = _rank_items(items)
+    record_event("social_media_extract", platform=target, session_id=session_id, page_id=target_id, item_count=len(items), automation="cdp")
+    return {
+        "ok": True,
+        "platform": target,
+        "session_id": session_id,
+        "page_id": target_id,
+        "url": page_info.get("href") or selected.get("url") or target_url,
+        "title": page_info.get("title") or selected.get("title"),
+        "read_only": True,
+        "browser_context": "agent_dedicated",
+        "automation": "cdp",
+        "browser_engine": "cdp",
+        "host_interactive": False,
+        "extraction_method": "dom",
+        "source": "dom",
+        "cdp_direct": True,
+        "cdp_endpoint": endpoint,
+        "cdp_target_id": target_id,
+        "items": items,
+        "item_count": len(items),
+        "extract_attempts": attempts,
+        "extract_waited_ms": waited_ms,
+        "scroll_steps": scrolls_performed,
+        "ranked": bool(rank),
+    }
 
 
 def _scroll_is_exhausted(scroll_result: dict[str, Any]) -> bool:
@@ -462,35 +716,29 @@ def _extract_from_reattached_cdp(
     scroll_pause_ms: int,
     rank: bool,
     snapshot: dict[str, Any],
+    direct_cdp_error: Exception | None = None,
 ) -> dict[str, Any]:
-    attached = _run_browser_call(
-        _bs.browser_attach_cdp,
-        endpoint=str(snapshot["cdp_endpoint"]),
-        browser=str(snapshot.get("browser_name") or "chrome"),
-        instance_name=snapshot.get("instance_name"),
-        profile_name=snapshot.get("profile_name"),
-        browser_pid=snapshot.get("browser_pid"),
-        launched_debug_browser=bool(snapshot.get("launched_debug_browser")),
-        init_script_paths=snapshot.get("init_script_paths"),
-        grant_permissions=snapshot.get("granted_permissions"),
-    )
-    session_id = attached["session_id"]
-    _session, resolved_page_id, page = _run_browser_call(get_playwright_page, session_id, page_id=attached.get("page_id") or page_id)
-    result = _extract_from_page(
-        target=target,
-        session_id=session_id,
-        page_id=resolved_page_id,
-        page=page,
-        safe_limit=safe_limit,
-        wait_ms=wait_ms,
-        poll_ms=poll_ms,
-        scroll_steps=scroll_steps,
-        scroll_pause_ms=scroll_pause_ms,
-        rank=rank,
-        automation="cdp",
-    )
-    result["cdp_reattached"] = True
+    try:
+        result = _extract_from_cdp_endpoint(
+            target=target,
+            session_id=original_session_id,
+            page_id=page_id,
+            endpoint=str(snapshot["cdp_endpoint"]),
+            target_url=str(snapshot.get("url") or ""),
+            safe_limit=safe_limit,
+            wait_ms=wait_ms,
+            poll_ms=poll_ms,
+            scroll_steps=scroll_steps,
+            scroll_pause_ms=scroll_pause_ms,
+            rank=rank,
+        )
+    except Exception:
+        if direct_cdp_error is not None:
+            raise direct_cdp_error
+        raise
+    result["cdp_reattached"] = False
     result["original_session_id"] = original_session_id
+    result["cdp_recovery"] = "direct_endpoint"
     return result
 
 
@@ -543,15 +791,31 @@ def social_search(
             "host_interactive": False,
         }
     try:
-        extracted = social_extract(
-            platform=target,
-            session_id=started["session_id"],
-            page_id=started.get("page_id"),
-            limit=safe_limit,
-            scroll_steps=resolved_scroll_steps,
-            scroll_pause_ms=scroll_pause_ms,
-            rank=rank,
-        )
+        endpoint = _cdp_endpoint(started)
+        if (started.get("automation") == "cdp" or str(browser_engine).strip().lower() == "cdp") and endpoint:
+            extracted = _extract_from_cdp_endpoint(
+                target=target,
+                session_id=started["session_id"],
+                page_id=started.get("page_id"),
+                endpoint=endpoint,
+                target_url=url_info["url"],
+                safe_limit=safe_limit,
+                wait_ms=_DEFAULT_EXTRACT_WAIT_MS,
+                poll_ms=_DEFAULT_EXTRACT_POLL_MS,
+                scroll_steps=resolved_scroll_steps,
+                scroll_pause_ms=scroll_pause_ms,
+                rank=rank,
+            )
+        else:
+            extracted = social_extract(
+                platform=target,
+                session_id=started["session_id"],
+                page_id=started.get("page_id"),
+                limit=safe_limit,
+                scroll_steps=resolved_scroll_steps,
+                scroll_pause_ms=scroll_pause_ms,
+                rank=rank,
+            )
     finally:
         if not keep_open:
             browser_stop = agent_browser_stop(instance_name=started.get("instance_name") or instance_name, platform=target)

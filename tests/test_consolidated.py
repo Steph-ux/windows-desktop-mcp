@@ -1204,6 +1204,66 @@ class TestSocialMediaReadOnly:
         assert result["items"][0]["metrics"]["likes"] == 400
         assert result["items"][0]["rank_score"] > result["items"][1]["rank_score"]
 
+    def test_social_extract_direct_cdp_scrolls_and_ranks_items(self):
+        """CDP search extraction should not depend on Playwright page objects or their thread."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakeCdp:
+            def __init__(self):
+                self.article_calls = 0
+                self.scroll_calls = 0
+                self.expressions = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def evaluate(self, expression):
+                self.expressions.append(expression)
+                if "document.title" in expression:
+                    return {"href": "https://x.com/search?q=codex", "title": "X / codex"}
+                if "scrollBy" in expression:
+                    self.scroll_calls += 1
+                    return {"beforeY": 100, "afterY": 900, "beforeHeight": 3000, "afterHeight": 4500}
+                self.article_calls += 1
+                if self.article_calls == 1:
+                    return [{"platform": "x", "text": "Small", "url": "https://x.com/a/status/1", "metrics_text": "1 like, 10 views"}]
+                return [
+                    {"platform": "x", "text": "Small", "url": "https://x.com/a/status/1", "metrics_text": "1 like, 10 views"},
+                    {"platform": "x", "text": "Large", "url": "https://x.com/a/status/2", "metrics_text": "100 likes, 1K views"},
+                ]
+
+        fake_cdp = FakeCdp()
+        target = {"id": "target-1", "url": "https://x.com/search?q=codex", "title": "X", "webSocketDebuggerUrl": "ws://target-1"}
+        with patch.object(sm, "_select_cdp_page_target", return_value=target) as select_target:
+            with patch.object(sm, "_open_cdp_session", return_value=fake_cdp) as open_cdp:
+                result = sm._extract_from_cdp_endpoint(
+                    target="x",
+                    session_id="s1",
+                    page_id="p1",
+                    endpoint="http://127.0.0.1:9333",
+                    target_url="https://x.com/search?q=codex&src=typed_query&f=top",
+                    safe_limit=2,
+                    wait_ms=0,
+                    poll_ms=1,
+                    scroll_steps=1,
+                    scroll_pause_ms=0,
+                    rank=True,
+                )
+
+        assert result["ok"] is True
+        assert result["automation"] == "cdp"
+        assert result["cdp_direct"] is True
+        assert result["cdp_target_id"] == "target-1"
+        assert result["scroll_steps"] == 1
+        assert result["items"][0]["text"] == "Large"
+        assert fake_cdp.scroll_calls == 1
+        assert any("querySelectorAll('article')" in expression for expression in fake_cdp.expressions)
+        select_target.assert_called_once()
+        open_cdp.assert_called_once_with("ws://target-1")
+
     @pytest.mark.parametrize(
         "item,metric,expected",
         [
@@ -1254,18 +1314,10 @@ class TestSocialMediaReadOnly:
         assert called["value"] == {"ok": True}
         assert result == {"ok": True}
 
-    def test_social_extract_reattaches_cdp_when_session_thread_is_stale(self):
-        """CDP extraction should recover when a previous MCP call stored a dead Playwright thread."""
+    def test_social_extract_uses_direct_cdp_when_session_has_endpoint(self):
+        """CDP-backed sessions should extract through the endpoint, not a stored Playwright page."""
         from desktop_mcp.tools import social_media as sm
 
-        class FakePage:
-            url = "https://x.com/search?q=codex"
-
-            def evaluate(self, _script, _limit):
-                return [{"platform": "x", "text": "Reattached Codex post", "url": "https://x.com/a/status/2"}]
-
-        page = FakePage()
-        stale_error = RuntimeError("cannot switch to a different thread (which happens to have exited)")
         snapshot = {
             "cdp_endpoint": "http://127.0.0.1:9333",
             "browser_name": "chrome",
@@ -1275,17 +1327,25 @@ class TestSocialMediaReadOnly:
             "granted_permissions": [],
         }
         with patch.object(sm, "_playwright_session_snapshot", return_value=snapshot):
-            with patch.object(sm, "get_playwright_page", side_effect=[stale_error, ({"cdp_endpoint": snapshot["cdp_endpoint"]}, "p2", page)]):
-                with patch.object(sm._bs, "browser_attach_cdp", return_value={"session_id": "s2", "page_id": "p2"}) as attach:
+            with patch.object(sm, "_extract_from_cdp_endpoint", return_value={
+                "ok": True,
+                "platform": "x",
+                "session_id": "s1",
+                "page_id": "target-1",
+                "automation": "cdp",
+                "cdp_direct": True,
+                "items": [{"platform": "x", "text": "Direct Codex post", "url": "https://x.com/a/status/2"}],
+                "item_count": 1,
+            }) as direct:
+                with patch.object(sm, "get_playwright_page") as get_page:
                     result = sm.social_extract(platform="x", session_id="s1", page_id="p1", wait_ms=0)
 
         assert result["ok"] is True
         assert result["automation"] == "cdp"
-        assert result["session_id"] == "s2"
-        assert result["original_session_id"] == "s1"
-        assert result["cdp_reattached"] is True
-        assert result["items"][0]["text"] == "Reattached Codex post"
-        assert attach.call_args.kwargs["endpoint"] == "http://127.0.0.1:9333"
+        assert result["cdp_direct"] is True
+        assert result["items"][0]["text"] == "Direct Codex post"
+        assert direct.call_args.kwargs["endpoint"] == "http://127.0.0.1:9333"
+        get_page.assert_not_called()
 
     def test_social_search_starts_agent_browser_then_extracts_dom(self):
         """Search should orchestrate agent_browser.start then DOM extraction."""
@@ -1394,15 +1454,18 @@ class TestSocialMediaReadOnly:
             "automation": "cdp",
             "host_interactive": False,
             "profile_name": "agent-social-x-cdp",
+            "cdp_endpoint": "http://127.0.0.1:9333",
             "url": "https://x.com/search?q=codex&src=typed_query&f=top",
         }) as start:
-            with patch.object(sm, "social_extract", return_value={
+            with patch.object(sm, "_extract_from_cdp_endpoint", return_value={
                 "ok": True,
                 "platform": "x",
                 "extraction_method": "dom",
+                "automation": "cdp",
+                "cdp_direct": True,
                 "items": [],
                 "item_count": 0,
-            }):
+            }) as extract:
                 result = sm.social_search(
                     platform="x",
                     query="codex",
@@ -1418,6 +1481,8 @@ class TestSocialMediaReadOnly:
         assert start.call_args.kwargs["browser_engine"] == "cdp"
         assert start.call_args.kwargs["debug_port"] == 9333
         assert start.call_args.kwargs["profile_name"] == "agent-social-x-cdp"
+        assert extract.call_args.kwargs["endpoint"] == "http://127.0.0.1:9333"
+        assert extract.call_args.kwargs["target_url"] == "https://x.com/search?q=codex&src=typed_query&f=top"
 
 
 class TestVideoModule:

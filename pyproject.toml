@@ -43,6 +43,7 @@ dependencies = [
     "nest-asyncio>=1.6.0",
     "selenium>=4.20.0",
     "anyio>=4.0.0",
+    "websocket-client>=1.8.0",
 ]
 
 [project.optional-dependencies]
