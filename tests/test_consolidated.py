@@ -478,10 +478,16 @@ class TestAgenticEvals:
         assert manifest["ok"] is True
         search = manifest["tools"]["social_media"]["actions"]["search"]
         extract = manifest["tools"]["social_media"]["actions"]["extract"]
+        detail = manifest["tools"]["social_media"]["actions"]["detail"]
         assert search["risk"] == "read"
         assert extract["risk"] == "read"
+        assert detail["risk"] == "read"
         assert search["host_interactive"] is False
+        assert detail["host_interactive"] is False
         assert search["requires_host_confirmation"] is False
+        assert detail["requires_host_confirmation"] is False
+        assert "include_details" in search["signature"]
+        assert "detail_limit" in search["signature"]
 
         from desktop_mcp.tools import social_media as sm
 
@@ -832,30 +838,37 @@ class TestAgentBrowser:
                         "launched_debug_browser": True,
                         "headless": False,
                     }):
-                        with patch.object(ab._bs, "browser_navigate", return_value={
-                            "session_id": "s1",
-                            "page_id": "p1",
+                        with patch.object(ab, "cdp_navigate", return_value={
+                            "ok": True,
+                            "page_id": "target-1",
+                            "cdp_target_id": "target-1",
                             "url": target_url,
                             "title": "Search / X",
+                            "cdp_direct": True,
+                            "navigated": True,
                         }) as navigate:
-                            result = ab.agent_browser_start(
-                                platform="x",
-                                url=target_url,
-                                profile_name="agent-social-x-cdp",
-                                instance_name="agent-social-x-cdp",
-                                browser_engine="cdp",
-                                debug_port=9333,
-                            )
+                            with patch.object(ab._bs, "browser_navigate") as browser_navigate:
+                                result = ab.agent_browser_start(
+                                    platform="x",
+                                    url=target_url,
+                                    profile_name="agent-social-x-cdp",
+                                    instance_name="agent-social-x-cdp",
+                                    browser_engine="cdp",
+                                    debug_port=9333,
+                                )
 
         assert result["ok"] is True
         assert result["url"] == target_url
         assert result["navigated"] is True
+        assert result["cdp_direct"] is True
         navigate.assert_called_once_with(
-            session_id="s1",
-            page_id="p1",
+            endpoint="http://127.0.0.1:9333",
             url=target_url,
-            wait_until="domcontentloaded",
+            preferred_url="https://getadblock.com/fr/installed/",
+            page_id=None,
+            wait_ms=10000,
         )
+        browser_navigate.assert_not_called()
 
     def test_agent_browser_start_cdp_attaches_existing_endpoint_and_navigates(self):
         """CDP mode should re-attach to an already open Chrome and navigate in the same call."""
@@ -879,20 +892,24 @@ class TestAgentBrowser:
                         "headless": False,
                     }) as attach:
                         with patch.object(ab._bs, "browser_launch_and_attach") as launch:
-                            with patch.object(ab._bs, "browser_navigate", return_value={
-                                "session_id": "s1",
-                                "page_id": "p1",
+                            with patch.object(ab, "cdp_navigate", return_value={
+                                "ok": True,
+                                "page_id": "target-1",
+                                "cdp_target_id": "target-1",
                                 "url": target_url,
                                 "title": "Search / X",
+                                "cdp_direct": True,
+                                "navigated": True,
                             }) as navigate:
-                                result = ab.agent_browser_start(
-                                    platform="x",
-                                    url=target_url,
-                                    profile_name="agent-social-x-cdp",
-                                    instance_name="agent-social-x-cdp",
-                                    browser_engine="cdp",
-                                    debug_port=9333,
-                                )
+                                with patch.object(ab._bs, "browser_navigate") as browser_navigate:
+                                    result = ab.agent_browser_start(
+                                        platform="x",
+                                        url=target_url,
+                                        profile_name="agent-social-x-cdp",
+                                        instance_name="agent-social-x-cdp",
+                                        browser_engine="cdp",
+                                        debug_port=9333,
+                                    )
 
         assert result["ok"] is True
         assert result["automation"] == "cdp"
@@ -902,11 +919,13 @@ class TestAgentBrowser:
         assert attach.call_args.kwargs["ports"] == [9333]
         launch.assert_not_called()
         navigate.assert_called_once_with(
-            session_id="s1",
-            page_id="p1",
+            endpoint="http://127.0.0.1:9333",
             url=target_url,
-            wait_until="domcontentloaded",
+            preferred_url="https://x.com/home",
+            page_id=None,
+            wait_ms=10000,
         )
+        browser_navigate.assert_not_called()
 
     def test_agent_browser_start_cdp_returns_structured_navigation_timeout(self):
         """Warm CDP navigation timeouts should not make the agent browser unusable."""
@@ -927,20 +946,21 @@ class TestAgentBrowser:
                     "attached": True,
                     "headless": False,
                 }):
-                    with patch.object(ab._bs, "browser_navigate", side_effect=TimeoutError("Page.goto: Timeout 30000ms exceeded")):
-                        with patch.object(ab._bs, "browser_get_instance", return_value={
-                            "url": target_url,
-                            "title": "Search / X",
-                            "active_page_id": "p1",
-                        }):
-                            result = ab.agent_browser_start(
-                                platform="x",
-                                url=target_url,
-                                profile_name="agent-social-x-cdp",
-                                instance_name="agent-social-x-cdp",
-                                browser_engine="cdp",
-                                debug_port=9333,
-                            )
+                    with patch.object(ab, "cdp_navigate", side_effect=TimeoutError("Page.goto: Timeout 30000ms exceeded")):
+                        with patch.object(ab._bs, "browser_navigate") as browser_navigate:
+                            with patch.object(ab._bs, "browser_get_instance", return_value={
+                                "url": target_url,
+                                "title": "Search / X",
+                                "active_page_id": "p1",
+                            }):
+                                result = ab.agent_browser_start(
+                                    platform="x",
+                                    url=target_url,
+                                    profile_name="agent-social-x-cdp",
+                                    instance_name="agent-social-x-cdp",
+                                    browser_engine="cdp",
+                                    debug_port=9333,
+                                )
 
         assert result["ok"] is True
         assert result["automation"] == "cdp"
@@ -948,6 +968,7 @@ class TestAgentBrowser:
         assert result["navigated"] is True
         assert result["navigation_timed_out"] is True
         assert "Timeout" in result["navigation_error"]
+        browser_navigate.assert_not_called()
 
     def test_agent_browser_start_cdp_uses_known_instance_endpoint_before_scanning(self):
         """Warm agent instances should reattach through their known manifest endpoint before rescanning ports."""
@@ -1266,7 +1287,7 @@ class TestSocialMediaReadOnly:
 
     def test_cdp_session_suppresses_origin_header_for_chrome(self):
         """Chrome rejects raw CDP WebSockets with a localhost Origin unless it is omitted."""
-        from desktop_mcp.tools import social_media as sm
+        from desktop_mcp import cdp_client
 
         called = {}
 
@@ -1281,13 +1302,108 @@ class TestSocialMediaReadOnly:
                 return FakeSocket()
 
         with patch.dict(sys.modules, {"websocket": FakeWebsocketModule()}):
-            with sm._CdpSession("ws://127.0.0.1:9333/devtools/page/1", timeout=3):
+            with cdp_client.CdpSession("ws://127.0.0.1:9333/devtools/page/1", timeout=3):
                 pass
 
         assert called["ws_url"] == "ws://127.0.0.1:9333/devtools/page/1"
         assert called["kwargs"]["timeout"] == 3
         assert called["kwargs"]["suppress_origin"] is True
         assert called["closed"] is True
+
+    def test_cdp_target_selection_prefers_requested_page_and_ignores_browser_targets(self):
+        """Direct CDP target selection should choose the social page, not chrome/devtools pages."""
+        from desktop_mcp import cdp_client
+
+        targets = [
+            {"id": "chrome", "type": "page", "url": "chrome://newtab/", "webSocketDebuggerUrl": "ws://chrome"},
+            {"id": "devtools", "type": "page", "url": "devtools://devtools/bundled", "webSocketDebuggerUrl": "ws://devtools"},
+            {"id": "home", "type": "page", "url": "https://x.com/home", "webSocketDebuggerUrl": "ws://home"},
+            {"id": "search", "type": "page", "url": "https://x.com/search?q=codex&src=typed_query&f=top", "webSocketDebuggerUrl": "ws://search"},
+        ]
+        with patch.object(cdp_client, "cdp_targets", return_value=targets):
+            selected = cdp_client.select_cdp_page_target(
+                "http://127.0.0.1:9333",
+                preferred_url="https://x.com/search?q=codex&src=typed_query&f=top",
+            )
+
+        assert selected["id"] == "search"
+
+    def test_social_detail_x_article_uses_full_article_text_when_card_text_is_empty(self):
+        """X Article detail should preserve the full article body when tweetText is empty."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakeCdp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def evaluate(self, expression):
+                if "document.readyState" in expression:
+                    return {"href": "https://x.com/NickSpisak_/status/2040448463540830705", "title": "How to Build Your Second Brain", "ready": "complete"}
+                return {
+                    "platform": "x",
+                    "url": "https://x.com/NickSpisak_/status/2040448463540830705",
+                    "title": "How to Build Your Second Brain",
+                    "author": "Nick Spisak",
+                    "author_url": "https://x.com/NickSpisak_",
+                    "text": "",
+                    "full_text": "Nick Spisak How to Build Your Second Brain Create three folders: raw, wiki, outputs.",
+                    "metrics_text": "101 replies, 762 reposts, 5121 likes, 16138 bookmarks, 2395866 views",
+                    "links": ["https://x.com/NickSpisak_"],
+                    "media": [],
+                }
+
+        with patch.object(sm, "cdp_navigate", return_value={
+            "ok": True,
+            "url": "https://x.com/NickSpisak_/status/2040448463540830705",
+            "title": "How to Build Your Second Brain",
+            "page_id": "target-1",
+            "cdp_target_id": "target-1",
+            "navigated": True,
+        }):
+            with patch.object(sm, "_select_cdp_page_target", return_value={"id": "target-1", "url": "https://x.com/NickSpisak_/status/2040448463540830705", "webSocketDebuggerUrl": "ws://target-1"}):
+                with patch.object(sm, "_open_cdp_session", return_value=FakeCdp()):
+                    result = sm._extract_detail_from_cdp_endpoint(
+                        target="x",
+                        session_id="s1",
+                        page_id="target-1",
+                        endpoint="http://127.0.0.1:9333",
+                        target_url="https://x.com/NickSpisak_/status/2040448463540830705",
+                        wait_ms=100,
+                    )
+
+        assert result["ok"] is True
+        assert result["text"].startswith("Nick Spisak How to Build Your Second Brain")
+        assert result["full_text"].startswith("Nick Spisak How to Build Your Second Brain")
+        assert result["metrics"]["bookmarks"] == 16138
+
+    @pytest.mark.parametrize("platform", ["youtube", "tiktok", "instagram"])
+    def test_social_detail_normalizes_cross_platform_dom_payloads(self, platform):
+        """Detail extraction should return a stable shape across supported social platforms."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw = {
+            "platform": platform,
+            "url": f"https://example.com/{platform}",
+            "title": f"{platform} title",
+            "author": "creator",
+            "author_url": f"https://example.com/{platform}/creator",
+            "text": f"{platform} caption",
+            "full_text": f"{platform} caption 1.2K views 40 likes",
+            "metrics_text": "1.2K views 40 likes",
+            "links": ["https://example.com/a", "https://example.com/a"],
+            "media": [{"tag": "img", "src": "https://example.com/i.jpg"}],
+        }
+
+        detail = sm._normalize_detail(raw, platform, raw["url"])
+
+        assert detail["platform"] == platform
+        assert detail["text"] == f"{platform} caption"
+        assert detail["links"] == ["https://example.com/a"]
+        assert detail["media"][0]["tag"] == "img"
+        assert detail["metrics"]["views"] == 1200
 
     @pytest.mark.parametrize(
         "item,metric,expected",
@@ -1508,6 +1624,55 @@ class TestSocialMediaReadOnly:
         assert start.call_args.kwargs["profile_name"] == "agent-social-x-cdp"
         assert extract.call_args.kwargs["endpoint"] == "http://127.0.0.1:9333"
         assert extract.call_args.kwargs["target_url"] == "https://x.com/search?q=codex&src=typed_query&f=top"
+
+    def test_social_search_include_details_enriches_only_ranked_detail_limit(self):
+        """Search should keep details opt-in and enrich only the top ranked results."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "target-search",
+            "browser_context": "agent_dedicated",
+            "automation": "cdp",
+            "host_interactive": False,
+            "profile_name": "agent-social-x-cdp",
+            "instance_name": "agent-social-x-cdp",
+            "cdp_endpoint": "http://127.0.0.1:9333",
+            "url": "https://x.com/search?q=codex&src=typed_query&f=top",
+        }):
+            with patch.object(sm, "_extract_from_cdp_endpoint", return_value={
+                "ok": True,
+                "platform": "x",
+                "page_id": "target-search",
+                "extraction_method": "dom",
+                "automation": "cdp",
+                "cdp_direct": True,
+                "items": [
+                    {"platform": "x", "text": "", "url": "https://x.com/a/status/1", "rank_position": 1},
+                    {"platform": "x", "text": "Second", "url": "https://x.com/a/status/2", "rank_position": 2},
+                    {"platform": "x", "text": "Third", "url": "https://x.com/a/status/3", "rank_position": 3},
+                ],
+                "item_count": 3,
+            }):
+                with patch.object(sm, "social_detail", side_effect=[
+                    {"ok": True, "platform": "x", "url": "https://x.com/a/status/1", "text": "First detail", "full_text": "First detail"},
+                    {"ok": True, "platform": "x", "url": "https://x.com/a/status/2", "text": "Second detail", "full_text": "Second detail"},
+                ]) as detail:
+                    result = sm.social_search(
+                        platform="x",
+                        query="codex",
+                        browser_engine="cdp",
+                        include_details=True,
+                        detail_limit=2,
+                    )
+
+        assert result["details_included"] is True
+        assert result["detail_limit"] == 2
+        assert detail.call_count == 2
+        assert result["items"][0]["text"] == "First detail"
+        assert result["items"][0]["detail"]["full_text"] == "First detail"
+        assert "detail" not in result["items"][2]
 
 
 class TestVideoModule:

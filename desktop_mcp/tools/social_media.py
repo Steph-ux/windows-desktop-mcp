@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 import unicodedata
 from typing import Any
-import urllib.request
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 from ..browser_core import get_playwright_page
+from ..cdp_client import (
+    cdp_navigate,
+    cdp_page_info as _cdp_page_info,
+    js_call as _js_call,
+    open_cdp_session as _open_cdp_session,
+    select_cdp_page_target as _select_cdp_page_target,
+)
 from ..runtime import record_event
 from ..state import PLAYWRIGHT_SESSIONS, PLAYWRIGHT_SESSIONS_LOCK
 from .agent_browser import agent_browser_start, agent_browser_stop
@@ -150,6 +155,149 @@ _EXTRACTORS = {
     "instagram": _INSTAGRAM_EXTRACTOR,
 }
 
+_X_DETAIL_EXTRACTOR = r"""
+() => {
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const absolute = (href) => {
+    try { return new URL(href, location.href).href; } catch { return href || null; }
+  };
+  const root = document.querySelector('article') || document.querySelector('main') || document.body;
+  const textNodes = Array.from(root.querySelectorAll('[data-testid="tweetText"], div[lang]'))
+    .map((node) => clean(node.innerText || node.textContent))
+    .filter(Boolean);
+  const links = Array.from(root.querySelectorAll('a[href]')).map((a) => absolute(a.getAttribute('href'))).filter(Boolean);
+  const authorUrl = links.find((href) => /^https?:\/\/(x|twitter)\.com\/[^/?#]+\/?$/.test(href) && !/\/(home|search|notifications|messages|i)\b/.test(href)) || null;
+  const userName = clean(root.querySelector('[data-testid="User-Name"]')?.innerText || '');
+  const metricLabels = Array.from(root.querySelectorAll('[role="group"], [aria-label]'))
+    .map((node) => clean(node.getAttribute('aria-label')))
+    .filter(Boolean);
+  const media = Array.from(root.querySelectorAll('img, video')).map((node) => ({
+    tag: node.tagName.toLowerCase(),
+    src: node.currentSrc || node.src || node.poster || null,
+    alt: clean(node.getAttribute('alt') || '')
+  })).filter((item) => item.src || item.alt);
+  const allText = clean(root.innerText || root.textContent || document.body.innerText || '');
+  const text = textNodes.join('\n') || allText;
+  return {
+    platform: 'x',
+    url: location.href,
+    title: document.title,
+    author: userName.split('\n').find(Boolean) || null,
+    author_url: authorUrl,
+    text,
+    full_text: allText,
+    metrics_text: metricLabels.join(' | '),
+    links: Array.from(new Set(links)),
+    media,
+    source: 'dom'
+  };
+}
+"""
+
+_YOUTUBE_DETAIL_EXTRACTOR = r"""
+() => {
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const absolute = (href) => {
+    try { return new URL(href, location.href).href; } catch { return href || null; }
+  };
+  const root = document.querySelector('ytd-watch-flexy, ytd-page-manager, main') || document.body;
+  const title = clean(root.querySelector('h1, #title h1, ytd-watch-metadata h1')?.innerText || document.title);
+  const authorNode = root.querySelector('ytd-channel-name a, #owner a, a[href^="/@"]');
+  const description = clean(root.querySelector('#description-inline-expander, ytd-text-inline-expander, #description')?.innerText || '');
+  const metadata = clean(root.querySelector('#info, #info-strings, ytd-watch-info-text')?.innerText || '');
+  const links = Array.from(root.querySelectorAll('a[href]')).map((a) => absolute(a.getAttribute('href'))).filter(Boolean);
+  return {
+    platform: 'youtube',
+    url: location.href,
+    title,
+    author: clean(authorNode?.innerText || authorNode?.textContent || ''),
+    author_url: authorNode ? absolute(authorNode.getAttribute('href')) : null,
+    text: description || title,
+    full_text: clean([title, metadata, description].filter(Boolean).join('\n')),
+    metrics_text: metadata,
+    links: Array.from(new Set(links)),
+    media: [],
+    source: 'dom'
+  };
+}
+"""
+
+_TIKTOK_DETAIL_EXTRACTOR = r"""
+() => {
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const absolute = (href) => {
+    try { return new URL(href, location.href).href; } catch { return href || null; }
+  };
+  const root = document.querySelector('[data-e2e*="browse-video"], main, article') || document.body;
+  const links = Array.from(root.querySelectorAll('a[href]')).map((a) => absolute(a.getAttribute('href'))).filter(Boolean);
+  const authorLink = links.find((href) => /^https?:\/\/www\.tiktok\.com\/@[^/?#]+/.test(href)) || null;
+  const text = clean(root.querySelector('[data-e2e*="video-desc"], [data-e2e*="browse-video-desc"], h1')?.innerText || root.innerText || '');
+  const metricLabels = Array.from(root.querySelectorAll('[aria-label], strong, button'))
+    .map((node) => clean(node.getAttribute('aria-label') || node.innerText || node.textContent))
+    .filter(Boolean);
+  const media = Array.from(root.querySelectorAll('video, img')).map((node) => ({
+    tag: node.tagName.toLowerCase(),
+    src: node.currentSrc || node.src || node.poster || null,
+    alt: clean(node.getAttribute('alt') || '')
+  })).filter((item) => item.src || item.alt);
+  return {
+    platform: 'tiktok',
+    url: location.href,
+    title: document.title,
+    author: authorLink ? authorLink.split('/@')[1]?.split(/[/?#]/)[0] : null,
+    author_url: authorLink,
+    text,
+    full_text: clean(root.innerText || document.body.innerText || ''),
+    metrics_text: metricLabels.join(' | '),
+    links: Array.from(new Set(links)),
+    media,
+    source: 'dom'
+  };
+}
+"""
+
+_INSTAGRAM_DETAIL_EXTRACTOR = r"""
+() => {
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const absolute = (href) => {
+    try { return new URL(href, location.href).href; } catch { return href || null; }
+  };
+  const root = document.querySelector('article, main') || document.body;
+  const links = Array.from(root.querySelectorAll('a[href]')).map((a) => absolute(a.getAttribute('href'))).filter(Boolean);
+  const authorLink = links.find((href) => /^https?:\/\/www\.instagram\.com\/[^/?#]+\/?$/.test(href) && !/\/(explore|reels|direct)\b/.test(href)) || null;
+  const text = clean(root.querySelector('h1, span[dir="auto"], ul')?.innerText || root.innerText || '');
+  const metricLabels = Array.from(root.querySelectorAll('[aria-label], button, span'))
+    .map((node) => clean(node.getAttribute('aria-label') || node.innerText || node.textContent))
+    .filter(Boolean);
+  const media = Array.from(root.querySelectorAll('img, video')).map((node) => ({
+    tag: node.tagName.toLowerCase(),
+    src: node.currentSrc || node.src || node.poster || null,
+    alt: clean(node.getAttribute('alt') || '')
+  })).filter((item) => item.src || item.alt);
+  return {
+    platform: 'instagram',
+    url: location.href,
+    title: document.title,
+    author: authorLink ? authorLink.split('instagram.com/')[1]?.split(/[/?#]/)[0] : null,
+    author_url: authorLink,
+    text,
+    full_text: clean(root.innerText || document.body.innerText || ''),
+    metrics_text: metricLabels.join(' | '),
+    links: Array.from(new Set(links)),
+    media,
+    source: 'dom'
+  };
+}
+"""
+
+_DETAIL_EXTRACTORS = {
+    "x": _X_DETAIL_EXTRACTOR,
+    "youtube": _YOUTUBE_DETAIL_EXTRACTOR,
+    "youtube_studio": _YOUTUBE_DETAIL_EXTRACTOR,
+    "tiktok": _TIKTOK_DETAIL_EXTRACTOR,
+    "instagram": _INSTAGRAM_DETAIL_EXTRACTOR,
+}
+
 _DEFAULT_EXTRACT_WAIT_MS = 10000
 _DEFAULT_EXTRACT_POLL_MS = 250
 _DEFAULT_SCROLL_PAUSE_MS = 500
@@ -200,67 +348,6 @@ def _run_browser_call(fn, /, *args, **kwargs):
         return fn(*args, **kwargs)
     with ThreadPoolExecutor(max_workers=1) as executor:
         return executor.submit(lambda: fn(*args, **kwargs)).result()
-
-
-class _CdpSession:
-    def __init__(self, ws_url: str, timeout: float = 10.0):
-        self.ws_url = ws_url
-        self.timeout = timeout
-        self._ws = None
-        self._message_id = 0
-
-    def __enter__(self):
-        try:
-            import websocket
-        except ImportError as exc:
-            raise RuntimeError("websocket-client is required for direct CDP social extraction.") from exc
-        self._ws = websocket.create_connection(self.ws_url, timeout=self.timeout, suppress_origin=True)
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._ws is not None:
-            try:
-                self._ws.close()
-            finally:
-                self._ws = None
-        return False
-
-    def evaluate(self, expression: str, timeout: float | None = None) -> Any:
-        if self._ws is None:
-            raise RuntimeError("CDP session is not connected.")
-        self._message_id += 1
-        message_id = self._message_id
-        if timeout is not None and hasattr(self._ws, "settimeout"):
-            self._ws.settimeout(timeout)
-        self._ws.send(json.dumps({
-            "id": message_id,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": expression,
-                "awaitPromise": True,
-                "returnByValue": True,
-            },
-        }))
-        deadline = time.monotonic() + max(float(timeout if timeout is not None else self.timeout), 0.1)
-        while True:
-            if time.monotonic() > deadline:
-                raise TimeoutError("Timed out waiting for CDP Runtime.evaluate response.")
-            payload = json.loads(self._ws.recv())
-            if payload.get("id") != message_id:
-                continue
-            if payload.get("error"):
-                error = payload["error"]
-                raise RuntimeError(f"CDP evaluate failed: {error.get('message') or error}")
-            result = payload.get("result") or {}
-            if result.get("exceptionDetails"):
-                text = result["exceptionDetails"].get("text") or "JavaScript exception"
-                raise RuntimeError(f"CDP evaluate exception: {text}")
-            value = (result.get("result") or {}).get("value")
-            return value
-
-
-def _open_cdp_session(ws_url: str, timeout: float = 10.0) -> _CdpSession:
-    return _CdpSession(ws_url=ws_url, timeout=timeout)
 
 
 def _platform(platform: str) -> str:
@@ -315,87 +402,6 @@ def social_supported_platforms() -> dict[str, Any]:
 def _cdp_endpoint(started_or_session: dict[str, Any]) -> str:
     manifest = started_or_session.get("manifest") if isinstance(started_or_session.get("manifest"), dict) else {}
     return str(started_or_session.get("cdp_endpoint") or manifest.get("cdp_endpoint") or "").strip().rstrip("/")
-
-
-def _cdp_targets(endpoint: str, timeout: float = 5.0) -> list[dict[str, Any]]:
-    url = f"{endpoint.rstrip('/')}/json/list"
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-
-
-def _target_priority(target: dict[str, Any], preferred_url: str = "", page_id: str | None = None) -> int:
-    target_id = str(target.get("id") or "")
-    target_url = str(target.get("url") or "")
-    if page_id and target_id == str(page_id):
-        return 0
-    if not preferred_url:
-        return 10
-    normalized_target = _normalize_url_for_match(target_url)
-    normalized_preferred = _normalize_url_for_match(preferred_url)
-    if normalized_target and normalized_target == normalized_preferred:
-        return 1
-    target_parts = urlparse(target_url)
-    preferred_parts = urlparse(preferred_url)
-    if _same_social_host(target_parts.hostname, preferred_parts.hostname):
-        if target_parts.path == preferred_parts.path:
-            return 2
-        return 3
-    return 20
-
-
-def _select_cdp_page_target(endpoint: str, preferred_url: str = "", page_id: str | None = None) -> dict[str, Any]:
-    targets = _cdp_targets(endpoint)
-    pages = [
-        target for target in targets
-        if target.get("type") == "page"
-        and target.get("webSocketDebuggerUrl")
-        and not str(target.get("url") or "").startswith(("devtools://", "chrome://", "edge://"))
-    ]
-    if not pages:
-        raise RuntimeError(f"No debuggable page target found at {endpoint!r}.")
-    return min(pages, key=lambda target: _target_priority(target, preferred_url=preferred_url, page_id=page_id))
-
-
-def _normalize_url_for_match(value: str) -> str:
-    if not value:
-        return ""
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower()
-    path = parsed.path.rstrip("/")
-    query = parsed.query
-    return f"{parsed.scheme.lower()}://{host}{path}?{query}" if query else f"{parsed.scheme.lower()}://{host}{path}"
-
-
-def _same_social_host(left: str | None, right: str | None) -> bool:
-    if not left or not right:
-        return False
-    aliases = {
-        "twitter.com": "x.com",
-        "www.twitter.com": "x.com",
-        "www.x.com": "x.com",
-        "m.x.com": "x.com",
-        "youtu.be": "youtube.com",
-        "www.youtube.com": "youtube.com",
-        "m.youtube.com": "youtube.com",
-        "studio.youtube.com": "studio.youtube.com",
-        "www.tiktok.com": "tiktok.com",
-        "m.tiktok.com": "tiktok.com",
-        "www.instagram.com": "instagram.com",
-    }
-    left_key = aliases.get(left.lower(), left.lower())
-    right_key = aliases.get(right.lower(), right.lower())
-    return left_key == right_key
-
-
-def _js_call(function_source: str, *args: Any) -> str:
-    encoded_args = ", ".join(json.dumps(arg) for arg in args)
-    return f"({function_source})({encoded_args})"
-
-
-def _cdp_page_info(cdp: Any) -> dict[str, Any]:
-    value = cdp.evaluate("(() => ({ href: String(location.href), title: String(document.title || '') }))()")
-    return value if isinstance(value, dict) else {}
 
 
 def social_extract(
@@ -650,6 +656,113 @@ def _extract_from_cdp_endpoint(
     }
 
 
+def _extract_detail_from_cdp_endpoint(
+    target: str,
+    session_id: str,
+    page_id: str | None,
+    endpoint: str,
+    target_url: str,
+    wait_ms: int,
+    poll_ms: int = _DEFAULT_EXTRACT_POLL_MS,
+) -> dict[str, Any]:
+    navigation = cdp_navigate(
+        endpoint=endpoint,
+        url=target_url,
+        preferred_url=target_url,
+        page_id=page_id,
+        wait_ms=wait_ms,
+    )
+    selected = _select_cdp_page_target(endpoint, preferred_url=navigation.get("url") or target_url, page_id=navigation.get("cdp_target_id"))
+    target_id = str(selected.get("id") or navigation.get("cdp_target_id") or page_id or "")
+    ws_url = str(selected.get("webSocketDebuggerUrl") or "")
+    if not ws_url:
+        raise RuntimeError(f"Selected CDP target at {endpoint!r} has no webSocketDebuggerUrl.")
+    script = _DETAIL_EXTRACTORS[target]
+    deadline = time.monotonic() + max(int(wait_ms), 0) / 1000
+    poll_seconds = max(int(poll_ms), 0) / 1000
+    attempts = 0
+    raw_detail: dict[str, Any] = {}
+    page_info: dict[str, Any] = {}
+    started_at = time.monotonic()
+    with _open_cdp_session(ws_url) as cdp:
+        while True:
+            attempts += 1
+            page_info = _cdp_page_info(cdp)
+            raw = cdp.evaluate(_js_call(script))
+            raw_detail = raw if isinstance(raw, dict) else {}
+            if raw_detail.get("text") or raw_detail.get("full_text") or time.monotonic() >= deadline:
+                break
+            sleep_seconds = min(poll_seconds, max(deadline - time.monotonic(), 0))
+            if sleep_seconds <= 0:
+                break
+            time.sleep(sleep_seconds)
+    detail = _normalize_detail(raw_detail, target, page_info.get("href") or navigation.get("url") or target_url)
+    record_event("social_media_detail", platform=target, session_id=session_id, page_id=target_id, url=detail.get("url"))
+    return {
+        "ok": True,
+        "platform": target,
+        "session_id": session_id,
+        "page_id": target_id,
+        "url": detail.get("url") or page_info.get("href") or navigation.get("url") or target_url,
+        "title": detail.get("title") or page_info.get("title") or navigation.get("title"),
+        "author": detail.get("author"),
+        "author_url": detail.get("author_url"),
+        "text": detail.get("text") or "",
+        "full_text": detail.get("full_text") or detail.get("text") or "",
+        "metrics": detail.get("metrics") or {},
+        "metrics_text": detail.get("metrics_text") or "",
+        "links": detail.get("links") or [],
+        "media": detail.get("media") or [],
+        "read_only": True,
+        "browser_context": "agent_dedicated",
+        "automation": "cdp",
+        "browser_engine": "cdp",
+        "host_interactive": False,
+        "extraction_method": "dom",
+        "source": "dom",
+        "cdp_direct": True,
+        "cdp_endpoint": endpoint,
+        "cdp_target_id": target_id,
+        "extract_attempts": attempts,
+        "extract_waited_ms": int((time.monotonic() - started_at) * 1000),
+    }
+
+
+def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: str) -> dict[str, Any]:
+    detail = {str(key): value for key, value in raw_detail.items()} if isinstance(raw_detail, dict) else {}
+    detail["platform"] = platform
+    detail["url"] = str(detail.get("url") or fallback_url or "")
+    for key in ("title", "author", "author_url", "text", "full_text", "metrics_text"):
+        if detail.get(key) is not None:
+            detail[key] = str(detail.get(key) or "").strip()
+    if not detail.get("full_text") and detail.get("text"):
+        detail["full_text"] = detail["text"]
+    if not detail.get("text") and detail.get("full_text"):
+        detail["text"] = str(detail["full_text"])[:4000]
+    links = detail.get("links")
+    detail["links"] = _unique_strings(links if isinstance(links, list) else [])
+    media = detail.get("media")
+    detail["media"] = [item for item in media if isinstance(item, dict)] if isinstance(media, list) else []
+    detail["metrics"] = _extract_metrics({
+        "platform": platform,
+        "text": detail.get("full_text") or detail.get("text") or "",
+        "metrics_text": detail.get("metrics_text") or "",
+    })
+    return detail
+
+
+def _unique_strings(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
 def _scroll_is_exhausted(scroll_result: dict[str, Any]) -> bool:
     before_y = float(scroll_result.get("beforeY") or 0)
     after_y = float(scroll_result.get("afterY") or 0)
@@ -742,6 +855,128 @@ def _extract_from_reattached_cdp(
     return result
 
 
+def social_detail(
+    platform: str,
+    url: str,
+    session_id: str = "",
+    page_id: str | None = None,
+    profile_name: str = "",
+    instance_name: str = "",
+    browser: str = "chrome",
+    browser_engine: str = "cdp",
+    debug_port: int = 9333,
+    keep_open: bool = True,
+    wait_ms: int = _DEFAULT_EXTRACT_WAIT_MS,
+) -> dict[str, Any]:
+    """Open a read-only social item and extract its full visible DOM detail."""
+    target = _platform(platform)
+    target_url = str(url or "").strip()
+    if not target_url:
+        raise ValueError("url is required.")
+    started: dict[str, Any] | None = None
+    browser_stop: dict[str, Any] | None = None
+    resolved_session_id = str(session_id or "")
+    resolved_page_id = page_id
+    endpoint = ""
+    if resolved_session_id:
+        snapshot = _playwright_session_snapshot(resolved_session_id)
+        endpoint = _cdp_endpoint(snapshot)
+    if not endpoint:
+        started = agent_browser_start(
+            platform=target,
+            url=target_url,
+            profile_name=profile_name,
+            instance_name=instance_name,
+            browser=browser,
+            browser_engine=browser_engine,
+            debug_port=debug_port,
+            headless=False,
+            wait_until="domcontentloaded",
+        )
+        if not started.get("ok", True):
+            return {
+                **started,
+                "ok": False,
+                "platform": target,
+                "url": target_url,
+                "read_only": True,
+                "browser_context": "agent_dedicated",
+                "host_interactive": False,
+            }
+        resolved_session_id = str(started["session_id"])
+        resolved_page_id = started.get("page_id")
+        endpoint = _cdp_endpoint(started)
+    try:
+        if endpoint:
+            extracted = _extract_detail_from_cdp_endpoint(
+                target=target,
+                session_id=resolved_session_id,
+                page_id=resolved_page_id,
+                endpoint=endpoint,
+                target_url=target_url,
+                wait_ms=wait_ms,
+            )
+        else:
+            extracted = _extract_detail_from_playwright(
+                target=target,
+                session_id=resolved_session_id,
+                page_id=resolved_page_id,
+                target_url=target_url,
+                wait_ms=wait_ms,
+            )
+    finally:
+        if not keep_open and (started or instance_name):
+            browser_stop = agent_browser_stop(instance_name=(started or {}).get("instance_name") or instance_name, platform=target)
+    return {
+        **extracted,
+        "ok": bool(extracted.get("ok", True)),
+        "platform": target,
+        "url": extracted.get("url") or target_url,
+        "browser": started,
+        "browser_context": "agent_dedicated",
+        "host_interactive": False,
+        "read_only": True,
+        "keep_open": bool(keep_open),
+        "browser_stop": browser_stop,
+    }
+
+
+def _extract_detail_from_playwright(
+    target: str,
+    session_id: str,
+    page_id: str | None,
+    target_url: str,
+    wait_ms: int,
+) -> dict[str, Any]:
+    _session, resolved_page_id, page = _run_browser_call(get_playwright_page, session_id, page_id=page_id)
+    if getattr(page, "url", "") != target_url:
+        _run_browser_call(page.goto, target_url, wait_until="domcontentloaded", timeout=max(int(wait_ms), 1000))
+    raw = _run_browser_call(page.evaluate, _DETAIL_EXTRACTORS[target])
+    detail = _normalize_detail(raw if isinstance(raw, dict) else {}, target, getattr(page, "url", target_url))
+    return {
+        "ok": True,
+        "platform": target,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "url": detail.get("url") or getattr(page, "url", target_url),
+        "title": detail.get("title"),
+        "author": detail.get("author"),
+        "author_url": detail.get("author_url"),
+        "text": detail.get("text") or "",
+        "full_text": detail.get("full_text") or detail.get("text") or "",
+        "metrics": detail.get("metrics") or {},
+        "metrics_text": detail.get("metrics_text") or "",
+        "links": detail.get("links") or [],
+        "media": detail.get("media") or [],
+        "read_only": True,
+        "browser_context": "agent_dedicated",
+        "automation": "playwright",
+        "host_interactive": False,
+        "extraction_method": "dom",
+        "source": "dom",
+    }
+
+
 def social_search(
     platform: str,
     query: str,
@@ -759,6 +994,8 @@ def social_search(
     scroll_steps: int | None = None,
     scroll_pause_ms: int = _DEFAULT_SCROLL_PAUSE_MS,
     rank: bool = True,
+    include_details: bool = False,
+    detail_limit: int = 3,
 ) -> dict[str, Any]:
     """Open a read-only social search in the agent browser and extract DOM results."""
     target = _platform(platform)
@@ -816,6 +1053,22 @@ def social_search(
                 scroll_pause_ms=scroll_pause_ms,
                 rank=rank,
             )
+        if include_details:
+            extracted["items"] = _enrich_items_with_details(
+                items=list(extracted.get("items") or []),
+                target=target,
+                session_id=started["session_id"],
+                page_id=extracted.get("page_id") or started.get("page_id"),
+                detail_limit=detail_limit,
+                profile_name=profile_name,
+                instance_name=started.get("instance_name") or instance_name,
+                browser=browser,
+                browser_engine=browser_engine,
+                debug_port=debug_port,
+            )
+            extracted["item_count"] = len(extracted["items"])
+            extracted["details_included"] = True
+            extracted["detail_limit"] = max(int(detail_limit), 0)
     finally:
         if not keep_open:
             browser_stop = agent_browser_stop(instance_name=started.get("instance_name") or instance_name, platform=target)
@@ -834,6 +1087,48 @@ def social_search(
         "keep_open": bool(keep_open),
         "browser_stop": browser_stop,
     }
+
+
+def _enrich_items_with_details(
+    items: list[dict[str, Any]],
+    target: str,
+    session_id: str,
+    page_id: str | None,
+    detail_limit: int,
+    profile_name: str,
+    instance_name: str,
+    browser: str,
+    browser_engine: str,
+    debug_port: int,
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    remaining = max(int(detail_limit), 0)
+    for item in items:
+        current = dict(item)
+        url = str(current.get("url") or "").strip()
+        if remaining > 0 and url:
+            try:
+                detail = social_detail(
+                    platform=target,
+                    url=url,
+                    session_id=session_id,
+                    page_id=page_id,
+                    profile_name=profile_name,
+                    instance_name=instance_name,
+                    browser=browser,
+                    browser_engine=browser_engine,
+                    debug_port=debug_port,
+                    keep_open=True,
+                )
+                current["detail"] = {key: value for key, value in detail.items() if key not in {"browser", "browser_stop"}}
+                if not current.get("text") and detail.get("text"):
+                    current["text"] = detail["text"]
+                remaining -= 1
+            except Exception as exc:
+                current["detail_error"] = str(exc)
+                remaining -= 1
+        enriched.append(current)
+    return enriched
 
 
 def _resolve_scroll_steps(limit: int, scroll_steps: int | None) -> int:
@@ -932,6 +1227,7 @@ def _rank_score(metrics: dict[str, int]) -> float:
 
 
 __all__ = [
+    "social_detail",
     "social_extract",
     "social_platform_url",
     "social_search",

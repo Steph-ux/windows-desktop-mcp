@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import Any
 
+from ..cdp_client import cdp_navigate
 from ..runtime import record_event
 from . import browser_sessions as _bs
 
@@ -80,6 +81,47 @@ def _navigate_started_browser(started: dict[str, Any], target_url: str, wait_unt
             pass
         started["navigation_error"] = navigation_error
         started["navigation_timed_out"] = "timeout" in navigation_error.lower()
+        return started, started.get("url") == target_url, navigation_error
+
+
+def _cdp_endpoint(started: dict[str, Any]) -> str:
+    manifest = started.get("manifest") if isinstance(started.get("manifest"), dict) else {}
+    return str(started.get("cdp_endpoint") or manifest.get("cdp_endpoint") or "").strip().rstrip("/")
+
+
+def _navigate_started_cdp(started: dict[str, Any], target_url: str, wait_until: str) -> tuple[dict[str, Any], bool, str | None]:
+    endpoint = _cdp_endpoint(started)
+    if not target_url or not endpoint:
+        return started, bool(target_url and started.get("url") == target_url), None
+    if started.get("url") == target_url:
+        started["cdp_direct"] = True
+        return started, True, None
+    try:
+        navigation = cdp_navigate(
+            endpoint=endpoint,
+            url=target_url,
+            preferred_url=str(started.get("url") or target_url),
+            page_id=started.get("cdp_target_id"),
+            wait_ms=10000 if wait_until else 5000,
+        )
+        started.update({key: value for key, value in navigation.items() if value is not None})
+        started["cdp_direct"] = True
+        return started, bool(navigation.get("navigated")), None
+    except Exception as exc:
+        navigation_error = str(exc)
+        try:
+            instance = _run_browser_call(_bs.browser_get_instance, str(started.get("instance_name") or ""))
+            if instance.get("url"):
+                started["url"] = instance["url"]
+            if instance.get("title"):
+                started["title"] = instance["title"]
+            if instance.get("active_page_id"):
+                started["page_id"] = instance["active_page_id"]
+        except Exception:
+            pass
+        started["navigation_error"] = navigation_error
+        started["navigation_timed_out"] = "timeout" in navigation_error.lower()
+        started["cdp_direct"] = True
         return started, started.get("url") == target_url, navigation_error
 
 
@@ -241,7 +283,7 @@ def agent_browser_start(
                 init_script_paths=init_script_paths,
                 grant_permissions=grant_permissions,
             )
-        started, navigated, navigation_error = _navigate_started_browser(started, target_url, wait_until)
+        started, navigated, navigation_error = _navigate_started_cdp(started, target_url, wait_until)
         record_event(
             "agent_browser_start",
             profile_name=resolved_profile,
@@ -265,6 +307,7 @@ def agent_browser_start(
             "browser_context": "agent_dedicated",
             "automation": "cdp",
             "browser_engine": "cdp",
+            "cdp_direct": True,
             "cdp_reattached": cdp_reattached,
             "host_interactive": False,
             "uses_host_mouse": False,

@@ -214,11 +214,12 @@ R["agent_browser"] = (
 
 R["social_media"] = (
     "Read-only social media workflows using the dedicated agent browser and DOM extraction.\n"
-    "Actions: platform_url, supported_platforms, search, extract", {
+    "Actions: platform_url, supported_platforms, search, extract, detail", {
     "platform_url": _sm.social_platform_url,
     "supported_platforms": _sm.social_supported_platforms,
     "search": _sm.social_search,
     "extract": _sm.social_extract,
+    "detail": _sm.social_detail,
 })
 
 R["desktop_interact"] = (

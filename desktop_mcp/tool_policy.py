@@ -83,6 +83,7 @@ _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("social_media", "supported_platforms"): "read",
     ("social_media", "search"): "read",
     ("social_media", "extract"): "read",
+    ("social_media", "detail"): "read",
     ("operator", "start"): "medium",
     ("operator", "step"): "medium",
     ("operator", "finish"): "medium",
