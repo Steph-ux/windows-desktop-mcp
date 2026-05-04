@@ -42,6 +42,35 @@ def default_agent_instance_name(platform: str = "", name: str = "social") -> str
     return default_agent_profile_name(platform=platform, name=name)
 
 
+def _navigate_started_browser(started: dict[str, Any], target_url: str, wait_until: str) -> tuple[dict[str, Any], bool, str | None]:
+    if not target_url or not started.get("session_id") or started.get("url") == target_url:
+        return started, bool(target_url and started.get("url") == target_url), None
+    try:
+        navigation = _bs.browser_navigate(
+            session_id=started["session_id"],
+            page_id=started.get("page_id"),
+            url=target_url,
+            wait_until=wait_until,
+        )
+        started.update({key: value for key, value in navigation.items() if value is not None})
+        return started, True, None
+    except Exception as exc:
+        navigation_error = str(exc)
+        try:
+            instance = _bs.browser_get_instance(str(started.get("instance_name") or ""))
+            if instance.get("url"):
+                started["url"] = instance["url"]
+            if instance.get("title"):
+                started["title"] = instance["title"]
+            if instance.get("active_page_id"):
+                started["page_id"] = instance["active_page_id"]
+        except Exception:
+            pass
+        started["navigation_error"] = navigation_error
+        started["navigation_timed_out"] = "timeout" in navigation_error.lower()
+        return started, started.get("url") == target_url, navigation_error
+
+
 def agent_browser_ensure_profile(
     profile_name: str = "",
     platform: str = "",
@@ -149,16 +178,7 @@ def agent_browser_start(
                 init_script_paths=init_script_paths,
                 grant_permissions=grant_permissions,
             )
-        navigated = False
-        if target_url and started.get("session_id") and started.get("url") != target_url:
-            navigation = _bs.browser_navigate(
-                session_id=started["session_id"],
-                page_id=started.get("page_id"),
-                url=target_url,
-                wait_until=wait_until,
-            )
-            started.update({key: value for key, value in navigation.items() if value is not None})
-            navigated = True
+        started, navigated, navigation_error = _navigate_started_browser(started, target_url, wait_until)
         record_event(
             "agent_browser_start",
             profile_name=resolved_profile,
@@ -167,6 +187,7 @@ def agent_browser_start(
             url=target_url,
             browser_engine="cdp",
             cdp_reattached=cdp_reattached,
+            navigation_error=navigation_error,
             headless=False,
         )
         return {
@@ -177,6 +198,7 @@ def agent_browser_start(
             "platform": resolved_platform,
             "url": started.get("url") or target_url,
             "navigated": navigated or started.get("url") == target_url,
+            "navigation_error": navigation_error,
             "browser_context": "agent_dedicated",
             "automation": "cdp",
             "browser_engine": "cdp",
@@ -200,22 +222,14 @@ def agent_browser_start(
         grant_permissions=grant_permissions,
         preset_name=preset_name,
     )
-    navigated = False
-    if target_url and started.get("session_id") and started.get("url") != target_url:
-        navigation = _bs.browser_navigate(
-            session_id=started["session_id"],
-            page_id=started.get("page_id"),
-            url=target_url,
-            wait_until=wait_until,
-        )
-        started.update({key: value for key, value in navigation.items() if value is not None})
-        navigated = True
+    started, navigated, navigation_error = _navigate_started_browser(started, target_url, wait_until)
     record_event(
         "agent_browser_start",
         profile_name=resolved_profile,
         instance_name=resolved_instance,
         platform=resolved_platform,
         url=target_url,
+        navigation_error=navigation_error,
         headless=headless,
     )
     return {
@@ -226,6 +240,7 @@ def agent_browser_start(
         "platform": resolved_platform,
         "url": started.get("url") or target_url,
         "navigated": navigated,
+        "navigation_error": navigation_error,
         "browser_context": "agent_dedicated",
         "automation": "playwright",
         "browser_engine": "playwright",
