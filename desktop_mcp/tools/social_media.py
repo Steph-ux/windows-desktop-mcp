@@ -226,6 +226,7 @@ def social_search(
     headless: bool = True,
     width: int | str = "auto",
     height: int | str = "auto",
+    wait_until: str = "domcontentloaded",
 ) -> dict[str, Any]:
     """Open a read-only social search in the agent browser and extract DOM results."""
     target = _platform(platform)
@@ -239,6 +240,7 @@ def social_search(
         headless=headless,
         width=width,
         height=height,
+        wait_until=wait_until,
     )
     if not started.get("ok", True):
         return {

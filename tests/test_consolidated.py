@@ -733,7 +733,46 @@ class TestAgentBrowser:
         assert result["ok"] is True
         assert result["url"] == target_url
         assert result["navigated"] is True
-        navigate.assert_called_once_with(session_id="s1", page_id="p1", url=target_url)
+        navigate.assert_called_once_with(
+            session_id="s1",
+            page_id="p1",
+            url=target_url,
+            wait_until="domcontentloaded",
+        )
+
+    def test_agent_browser_start_bootstraps_blank_then_navigates_social_url(self):
+        """Social SPAs should not depend on networkidle during the initial browser start."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x"}):
+            with patch.object(ab._bs, "browser_start_instance", return_value={
+                "ok": True,
+                "reused": False,
+                "session_id": "s1",
+                "page_id": "p1",
+                "url": "about:blank",
+                "profile_name": "agent-social-x",
+                "instance_name": "agent-social-x",
+            }) as start:
+                with patch.object(ab._bs, "browser_navigate", return_value={
+                    "session_id": "s1",
+                    "page_id": "p1",
+                    "url": target_url,
+                    "title": "Search / X",
+                }) as navigate:
+                    result = ab.agent_browser_start(platform="x", url=target_url)
+
+        assert result["ok"] is True
+        assert result["url"] == target_url
+        assert result["navigated"] is True
+        assert start.call_args.kwargs["url"] == "about:blank"
+        navigate.assert_called_once_with(
+            session_id="s1",
+            page_id="p1",
+            url=target_url,
+            wait_until="domcontentloaded",
+        )
 
     def test_agent_browser_manifest_is_not_host_interactive(self):
         """The manifest should expose agent browser actions without host UI confirmation."""

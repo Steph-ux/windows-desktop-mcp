@@ -88,6 +88,7 @@ def agent_browser_start(
     headless: bool = True,
     width: int | str = "auto",
     height: int | str = "auto",
+    wait_until: str = "domcontentloaded",
     storage_state_path: str | None = None,
     init_script_paths: list[str] | None = None,
     grant_permissions: list[str] | None = None,
@@ -105,9 +106,10 @@ def agent_browser_start(
     resolved_profile = profile["profile_name"]
     resolved_instance = _safe_name(instance_name) if instance_name else default_agent_instance_name(resolved_platform, name)
     target_url = url or _DEFAULT_PLATFORM_URLS.get(resolved_platform, "about:blank")
+    startup_url = "about:blank" if target_url and target_url != "about:blank" else target_url
     started = _bs.browser_start_instance(
         instance_name=resolved_instance,
-        url=target_url,
+        url=startup_url,
         profile_name=resolved_profile,
         browser=browser,
         headless=headless,
@@ -119,11 +121,12 @@ def agent_browser_start(
         preset_name=preset_name,
     )
     navigated = False
-    if started.get("reused") and target_url and started.get("session_id") and started.get("url") != target_url:
+    if target_url and started.get("session_id") and started.get("url") != target_url:
         navigation = _bs.browser_navigate(
             session_id=started["session_id"],
             page_id=started.get("page_id"),
             url=target_url,
+            wait_until=wait_until,
         )
         started.update({key: value for key, value in navigation.items() if value is not None})
         navigated = True
