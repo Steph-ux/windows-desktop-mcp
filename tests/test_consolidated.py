@@ -991,6 +991,39 @@ class TestAgentBrowser:
         list_endpoints.assert_not_called()
         launch.assert_not_called()
 
+    def test_run_browser_call_uses_worker_thread_when_loop_is_running(self):
+        """Agent browser should move sync Playwright calls off the asyncio loop thread."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        called = {}
+
+        class FakeLoop:
+            pass
+
+        class FakeFuture:
+            def result(self):
+                return {"ok": True}
+
+        class FakeExecutor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def submit(self, fn):
+                called["submitted"] = True
+                called["value"] = fn()
+                return FakeFuture()
+
+        with patch.object(ab.asyncio, "get_running_loop", return_value=FakeLoop()):
+            with patch.object(ab, "ThreadPoolExecutor", return_value=FakeExecutor()):
+                result = ab._run_browser_call(lambda: {"ok": True})
+
+        assert called["submitted"] is True
+        assert called["value"] == {"ok": True}
+        assert result == {"ok": True}
+
     def test_agent_browser_start_cdp_launches_when_endpoint_attach_fails(self):
         """CDP mode should fall back to launching Chrome when an advertised endpoint is stale."""
         from desktop_mcp.tools import agent_browser as ab

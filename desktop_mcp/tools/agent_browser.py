@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import Any
 
@@ -42,11 +44,21 @@ def default_agent_instance_name(platform: str = "", name: str = "social") -> str
     return default_agent_profile_name(platform=platform, name=name)
 
 
+def _run_browser_call(fn, /, *args, **kwargs):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return fn(*args, **kwargs)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: fn(*args, **kwargs)).result()
+
+
 def _navigate_started_browser(started: dict[str, Any], target_url: str, wait_until: str) -> tuple[dict[str, Any], bool, str | None]:
     if not target_url or not started.get("session_id") or started.get("url") == target_url:
         return started, bool(target_url and started.get("url") == target_url), None
     try:
-        navigation = _bs.browser_navigate(
+        navigation = _run_browser_call(
+            _bs.browser_navigate,
             session_id=started["session_id"],
             page_id=started.get("page_id"),
             url=target_url,
@@ -57,7 +69,7 @@ def _navigate_started_browser(started: dict[str, Any], target_url: str, wait_unt
     except Exception as exc:
         navigation_error = str(exc)
         try:
-            instance = _bs.browser_get_instance(str(started.get("instance_name") or ""))
+            instance = _run_browser_call(_bs.browser_get_instance, str(started.get("instance_name") or ""))
             if instance.get("url"):
                 started["url"] = instance["url"]
             if instance.get("title"):
@@ -91,7 +103,8 @@ def _attach_known_cdp_instance(
         return None
     browser_pid = instance.get("browser_pid") or instance.get("manifest", {}).get("browser_pid")
     launched_debug_browser = bool(instance.get("launched_debug_browser") or instance.get("manifest", {}).get("launched_debug_browser"))
-    return _bs.browser_attach_cdp(
+    return _run_browser_call(
+        _bs.browser_attach_cdp,
         endpoint=endpoint,
         browser=browser,
         instance_name=resolved_instance,
@@ -200,7 +213,8 @@ def agent_browser_start(
                 endpoints = {"count": 0, "endpoints": []}
             if int(endpoints.get("count") or 0) > 0:
                 try:
-                    started = _bs.browser_attach_existing(
+                    started = _run_browser_call(
+                        _bs.browser_attach_existing,
                         browser=browser,
                         instance_name=resolved_instance,
                         profile_name=resolved_profile,
@@ -214,7 +228,8 @@ def agent_browser_start(
                 except Exception:
                     started = None
         if started is None:
-            started = _bs.browser_launch_and_attach(
+            started = _run_browser_call(
+                _bs.browser_launch_and_attach,
                 browser=browser,
                 port=cdp_port,
                 url=target_url,
@@ -257,7 +272,8 @@ def agent_browser_start(
         }
 
     startup_url = "about:blank" if target_url and target_url != "about:blank" else target_url
-    started = _bs.browser_start_instance(
+    started = _run_browser_call(
+        _bs.browser_start_instance,
         instance_name=resolved_instance,
         url=startup_url,
         profile_name=resolved_profile,
@@ -305,11 +321,11 @@ def agent_browser_status(profile_name: str = "", instance_name: str = "", platfo
     profile: dict[str, Any] | None
     instance: dict[str, Any] | None
     try:
-        profile = _bs.browser_get_profile(resolved_profile)
+        profile = _run_browser_call(_bs.browser_get_profile, resolved_profile)
     except Exception as exc:
         profile = {"ok": False, "error": str(exc)}
     try:
-        instance = _bs.browser_get_instance(resolved_instance)
+        instance = _run_browser_call(_bs.browser_get_instance, resolved_instance)
     except Exception as exc:
         instance = {"ok": False, "error": str(exc)}
     return {
@@ -327,7 +343,7 @@ def agent_browser_status(profile_name: str = "", instance_name: str = "", platfo
 def agent_browser_stop(instance_name: str = "", platform: str = "", name: str = "social") -> dict[str, Any]:
     """Stop a dedicated agent browser instance by name."""
     resolved_instance = _safe_name(instance_name) if instance_name else default_agent_instance_name(platform, name)
-    result = _bs.browser_stop_instance(resolved_instance)
+    result = _run_browser_call(_bs.browser_stop_instance, resolved_instance)
     record_event("agent_browser_stop", instance_name=resolved_instance)
     return {
         **result,
