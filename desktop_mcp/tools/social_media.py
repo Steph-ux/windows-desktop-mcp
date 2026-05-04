@@ -12,6 +12,7 @@ from urllib.parse import quote_plus
 
 from ..browser_core import get_playwright_page
 from ..cdp_client import (
+    cdp_close_page_target,
     cdp_navigate,
     cdp_page_info as _cdp_page_info,
     js_call as _js_call,
@@ -684,6 +685,8 @@ def _extract_detail_from_cdp_endpoint(
     wait_ms: int,
     poll_ms: int = _DEFAULT_EXTRACT_POLL_MS,
     new_tab_if_needed: bool = False,
+    force_new_tab: bool = False,
+    close_after_extract: bool = False,
 ) -> dict[str, Any]:
     navigation = cdp_navigate(
         endpoint=endpoint,
@@ -692,6 +695,7 @@ def _extract_detail_from_cdp_endpoint(
         page_id=page_id,
         wait_ms=wait_ms,
         new_tab_if_needed=new_tab_if_needed,
+        force_new_tab=force_new_tab,
     )
     selected = _select_cdp_page_target(endpoint, preferred_url=navigation.get("url") or target_url, page_id=navigation.get("cdp_target_id"))
     target_id = str(selected.get("id") or navigation.get("cdp_target_id") or page_id or "")
@@ -704,19 +708,28 @@ def _extract_detail_from_cdp_endpoint(
     attempts = 0
     raw_detail: dict[str, Any] = {}
     page_info: dict[str, Any] = {}
+    close_result: dict[str, Any] | None = None
+    close_error: str | None = None
     started_at = time.monotonic()
-    with _open_cdp_session(ws_url) as cdp:
-        while True:
-            attempts += 1
-            page_info = _cdp_page_info(cdp)
-            raw = cdp.evaluate(_js_call(script))
-            raw_detail = raw if isinstance(raw, dict) else {}
-            if _detail_is_meaningful(raw_detail, target) or time.monotonic() >= deadline:
-                break
-            sleep_seconds = min(poll_seconds, max(deadline - time.monotonic(), 0))
-            if sleep_seconds <= 0:
-                break
-            time.sleep(sleep_seconds)
+    try:
+        with _open_cdp_session(ws_url) as cdp:
+            while True:
+                attempts += 1
+                page_info = _cdp_page_info(cdp)
+                raw = cdp.evaluate(_js_call(script))
+                raw_detail = raw if isinstance(raw, dict) else {}
+                if _detail_is_meaningful(raw_detail, target) or time.monotonic() >= deadline:
+                    break
+                sleep_seconds = min(poll_seconds, max(deadline - time.monotonic(), 0))
+                if sleep_seconds <= 0:
+                    break
+                time.sleep(sleep_seconds)
+    finally:
+        if close_after_extract and navigation.get("created_target") and target_id:
+            try:
+                close_result = cdp_close_page_target(endpoint, target_id)
+            except Exception as exc:
+                close_error = str(exc)
     detail = _normalize_detail(raw_detail, target, page_info.get("href") or navigation.get("url") or target_url)
     record_event("social_media_detail", platform=target, session_id=session_id, page_id=target_id, url=detail.get("url"))
     return {
@@ -744,6 +757,10 @@ def _extract_detail_from_cdp_endpoint(
         "cdp_direct": True,
         "cdp_endpoint": endpoint,
         "cdp_target_id": target_id,
+        "created_target": bool(navigation.get("created_target")),
+        "temporary_detail_tab": bool(force_new_tab and close_after_extract),
+        "detail_tab_closed": bool(close_result and close_result.get("ok")),
+        "detail_tab_close_error": close_error,
         "extract_attempts": attempts,
         "extract_waited_ms": int((time.monotonic() - started_at) * 1000),
     }
@@ -912,6 +929,7 @@ def social_detail(
     debug_port: int = 9333,
     keep_open: bool = True,
     wait_ms: int = _DEFAULT_EXTRACT_WAIT_MS,
+    temporary_detail_tab: bool = False,
 ) -> dict[str, Any]:
     """Open a read-only social item and extract its full visible DOM detail."""
     target = _platform(platform)
@@ -963,6 +981,8 @@ def social_detail(
                 target_url=target_url,
                 wait_ms=wait_ms,
                 new_tab_if_needed=_is_cdp_engine(browser_engine),
+                force_new_tab=bool(temporary_detail_tab and _is_cdp_engine(browser_engine)),
+                close_after_extract=bool(temporary_detail_tab and _is_cdp_engine(browser_engine)),
             )
         else:
             extracted = _extract_detail_from_playwright(
@@ -1169,6 +1189,7 @@ def _enrich_items_with_details(
                     browser_engine=browser_engine,
                     debug_port=debug_port,
                     keep_open=True,
+                    temporary_detail_tab=_is_cdp_engine(browser_engine),
                 )
                 current["detail"] = {key: value for key, value in detail.items() if key not in {"browser", "browser_stop"}}
                 if not current.get("text") and detail.get("text"):

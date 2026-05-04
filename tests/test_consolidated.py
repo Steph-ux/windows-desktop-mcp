@@ -1428,6 +1428,47 @@ class TestSocialMediaReadOnly:
             timeout=10.0,
         )
 
+    def test_cdp_navigate_force_new_page_even_for_same_host(self):
+        """Detail extraction can force a temporary tab without replacing the search tab."""
+        from desktop_mcp import cdp_client
+
+        class FakeCdp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def call(self, method, params=None):
+                raise AssertionError(f"unexpected CDP call: {method}")
+
+        with patch.object(cdp_client, "select_cdp_page_target") as select:
+            with patch.object(cdp_client, "cdp_create_page_target", return_value={
+                "id": "detail-tab",
+                "type": "page",
+                "url": "https://x.com/a/status/1",
+                "webSocketDebuggerUrl": "ws://detail-tab",
+            }) as create:
+                with patch.object(cdp_client, "open_cdp_session", return_value=FakeCdp()):
+                    with patch.object(cdp_client, "_wait_for_page", return_value={
+                        "href": "https://x.com/a/status/1",
+                        "title": "Post / X",
+                        "ready": "complete",
+                    }):
+                        result = cdp_client.cdp_navigate(
+                            endpoint="http://127.0.0.1:9333",
+                            url="https://x.com/a/status/1",
+                            preferred_url="https://x.com/a/status/1",
+                            force_new_tab=True,
+                        )
+
+        assert result["ok"] is True
+        assert result["created_target"] is True
+        assert result["force_new_tab"] is True
+        assert result["cdp_target_id"] == "detail-tab"
+        select.assert_not_called()
+        create.assert_called_once()
+
     def test_social_detail_x_article_uses_full_article_text_when_card_text_is_empty(self):
         """X Article detail should preserve the full article body when tweetText is empty."""
         from desktop_mcp.tools import social_media as sm
@@ -1495,6 +1536,68 @@ class TestSocialMediaReadOnly:
         assert result["full_text"].startswith("Nick Spisak How to Build Your Second Brain")
         assert result["metrics"]["bookmarks"] == 16138
         assert fake_cdp.detail_calls == 2
+
+    def test_social_detail_temporary_cdp_tab_closes_created_target(self):
+        """Temporary detail extraction should close its CDP target after reading the post."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakeCdp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def evaluate(self, expression):
+                if "document.readyState" in expression:
+                    return {"href": "https://x.com/a/status/1", "title": "Post / X", "ready": "complete"}
+                return {
+                    "platform": "x",
+                    "url": "https://x.com/a/status/1",
+                    "title": "Post / X",
+                    "author": "Author",
+                    "author_url": "https://x.com/a",
+                    "text": "Codex detail",
+                    "full_text": "Author Codex detail",
+                    "metrics_text": "10 replies, 20 reposts, 30 likes, 40 bookmarks, 500 views",
+                    "links": ["https://x.com/a"],
+                    "media": [],
+                }
+
+        with patch.object(sm, "cdp_navigate", return_value={
+            "ok": True,
+            "url": "https://x.com/a/status/1",
+            "title": "Post / X",
+            "page_id": "detail-tab",
+            "cdp_target_id": "detail-tab",
+            "navigated": True,
+            "created_target": True,
+        }) as navigate:
+            with patch.object(sm, "_select_cdp_page_target", return_value={
+                "id": "detail-tab",
+                "url": "https://x.com/a/status/1",
+                "webSocketDebuggerUrl": "ws://detail-tab",
+            }):
+                with patch.object(sm, "_open_cdp_session", return_value=FakeCdp()):
+                    with patch.object(sm, "cdp_close_page_target", return_value={"ok": True, "target_id": "detail-tab"}) as close:
+                        result = sm._extract_detail_from_cdp_endpoint(
+                            target="x",
+                            session_id="s1",
+                            page_id="search-tab",
+                            endpoint="http://127.0.0.1:9333",
+                            target_url="https://x.com/a/status/1",
+                            wait_ms=100,
+                            force_new_tab=True,
+                            close_after_extract=True,
+                        )
+
+        assert result["ok"] is True
+        assert result["temporary_detail_tab"] is True
+        assert result["detail_tab_closed"] is True
+        assert result["cdp_target_id"] == "detail-tab"
+        assert result["text"] == "Codex detail"
+        assert navigate.call_args.kwargs["force_new_tab"] is True
+        close.assert_called_once_with("http://127.0.0.1:9333", "detail-tab")
 
     @pytest.mark.parametrize("platform", ["youtube", "tiktok", "instagram"])
     def test_social_detail_normalizes_cross_platform_dom_payloads(self, platform):
@@ -1822,6 +1925,7 @@ class TestSocialMediaReadOnly:
         assert result["details_included"] is True
         assert result["detail_limit"] == 2
         assert detail.call_count == 2
+        assert all(call.kwargs["temporary_detail_tab"] is True for call in detail.call_args_list)
         assert result["items"][0]["text"] == "First detail"
         assert result["items"][0]["detail"]["full_text"] == "First detail"
         assert "detail" not in result["items"][2]

@@ -107,6 +107,20 @@ def cdp_create_page_target(endpoint: str, url: str = "about:blank", timeout: flo
     return payload
 
 
+def cdp_close_page_target(endpoint: str, target_id: str, timeout: float = 5.0) -> dict[str, Any]:
+    resolved_target_id = str(target_id or "").strip()
+    if not resolved_target_id:
+        raise ValueError("target_id is required.")
+    request_url = f"{endpoint.rstrip('/')}/json/close/{quote(resolved_target_id, safe='')}"
+    with urllib.request.urlopen(request_url, timeout=timeout) as response:
+        body = response.read().decode("utf-8", errors="replace")
+    return {
+        "ok": True,
+        "target_id": resolved_target_id,
+        "response": body,
+    }
+
+
 def js_call(function_source: str, *args: Any) -> str:
     encoded_args = ", ".join(json.dumps(arg) for arg in args)
     return f"({function_source})({encoded_args})"
@@ -124,18 +138,23 @@ def cdp_navigate(
     page_id: str | None = None,
     wait_ms: int = 10000,
     new_tab_if_needed: bool = False,
+    force_new_tab: bool = False,
 ) -> dict[str, Any]:
     created_target = False
-    try:
-        selected = select_cdp_page_target(endpoint, preferred_url=preferred_url or url, page_id=page_id)
-    except RuntimeError:
-        if not new_tab_if_needed or not url:
-            raise
+    if force_new_tab and url:
         selected = cdp_create_page_target(endpoint, url=url, timeout=max(int(wait_ms), 1000) / 1000)
         created_target = True
-    if new_tab_if_needed and url and not created_target and not _target_matches_url_context(selected, url):
-        selected = cdp_create_page_target(endpoint, url=url, timeout=max(int(wait_ms), 1000) / 1000)
-        created_target = True
+    else:
+        try:
+            selected = select_cdp_page_target(endpoint, preferred_url=preferred_url or url, page_id=page_id)
+        except RuntimeError:
+            if not new_tab_if_needed or not url:
+                raise
+            selected = cdp_create_page_target(endpoint, url=url, timeout=max(int(wait_ms), 1000) / 1000)
+            created_target = True
+        if new_tab_if_needed and url and not created_target and not _target_matches_url_context(selected, url):
+            selected = cdp_create_page_target(endpoint, url=url, timeout=max(int(wait_ms), 1000) / 1000)
+            created_target = True
     target_id = str(selected.get("id") or page_id or "")
     ws_url = str(selected.get("webSocketDebuggerUrl") or "")
     if not ws_url:
@@ -156,6 +175,7 @@ def cdp_navigate(
         "cdp_direct": True,
         "navigated": _normalize_url_for_match(page_info.get("href") or "") == _normalize_url_for_match(url) if url else True,
         "created_target": created_target,
+        "force_new_tab": bool(force_new_tab),
         "navigation_waited_ms": int((time.monotonic() - started_at) * 1000),
     }
 
@@ -241,6 +261,7 @@ def same_social_host(left: str | None, right: str | None) -> bool:
 
 __all__ = [
     "CdpSession",
+    "cdp_close_page_target",
     "cdp_create_page_target",
     "cdp_navigate",
     "cdp_page_info",
