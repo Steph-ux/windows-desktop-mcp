@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import time
+import unicodedata
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -10,7 +12,7 @@ from ..browser_core import get_playwright_page
 from ..runtime import record_event
 from ..state import PLAYWRIGHT_SESSIONS, PLAYWRIGHT_SESSIONS_LOCK
 from . import browser_sessions as _bs
-from .agent_browser import agent_browser_start
+from .agent_browser import agent_browser_start, agent_browser_stop
 
 _PLATFORM_ALIASES = {
     "twitter": "x",
@@ -147,6 +149,45 @@ _EXTRACTORS = {
 
 _DEFAULT_EXTRACT_WAIT_MS = 10000
 _DEFAULT_EXTRACT_POLL_MS = 250
+_DEFAULT_SCROLL_PAUSE_MS = 500
+
+_SCROLL_SCRIPT = r"""
+() => {
+  const beforeY = window.scrollY || document.documentElement.scrollTop || 0;
+  const beforeHeight = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0);
+  const delta = Math.max(Math.floor((window.innerHeight || 900) * 0.85), 600);
+  window.scrollBy({ top: delta, left: 0, behavior: 'instant' });
+  const afterY = window.scrollY || document.documentElement.scrollTop || 0;
+  const afterHeight = Math.max(document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0);
+  return { beforeY, afterY, beforeHeight, afterHeight, delta };
+}
+"""
+
+_METRIC_NUMBER = r"(?P<value>\d[\d\s.,]*)(?P<suffix>\s*[kmb])?"
+_METRIC_PATTERNS = {
+    "replies": [
+        rf"{_METRIC_NUMBER}\s*(?:reponses?|replies?|responses?|comments?)\b",
+    ],
+    "reposts": [
+        rf"{_METRIC_NUMBER}\s*(?:reposts?|retweets?|shares?)\b",
+    ],
+    "likes": [
+        rf"{_METRIC_NUMBER}\s*(?:j\s*aime|likes?)\b",
+    ],
+    "bookmarks": [
+        rf"{_METRIC_NUMBER}\s*(?:signets?|bookmarks?|saves?)\b",
+    ],
+    "views": [
+        rf"{_METRIC_NUMBER}\s*(?:vues?|views?)\b",
+    ],
+}
+_RANK_WEIGHTS = {
+    "views": 0.05,
+    "likes": 3.0,
+    "replies": 2.0,
+    "reposts": 4.0,
+    "bookmarks": 5.0,
+}
 
 
 def _platform(platform: str) -> str:
@@ -205,6 +246,9 @@ def social_extract(
     limit: int = 10,
     wait_ms: int = _DEFAULT_EXTRACT_WAIT_MS,
     poll_ms: int = _DEFAULT_EXTRACT_POLL_MS,
+    scroll_steps: int = 0,
+    scroll_pause_ms: int = _DEFAULT_SCROLL_PAUSE_MS,
+    rank: bool = True,
 ) -> dict[str, Any]:
     """Extract visible social media items from the current page through DOM/CDP."""
     target = _platform(platform)
@@ -220,6 +264,9 @@ def social_extract(
             safe_limit=safe_limit,
             wait_ms=wait_ms,
             poll_ms=poll_ms,
+            scroll_steps=scroll_steps,
+            scroll_pause_ms=scroll_pause_ms,
+            rank=rank,
             automation="cdp" if session.get("cdp_endpoint") else "playwright",
         )
     except Exception as exc:
@@ -232,6 +279,9 @@ def social_extract(
             safe_limit=safe_limit,
             wait_ms=wait_ms,
             poll_ms=poll_ms,
+            scroll_steps=scroll_steps,
+            scroll_pause_ms=scroll_pause_ms,
+            rank=rank,
             snapshot=snapshot,
         )
 
@@ -244,15 +294,22 @@ def _extract_from_page(
     safe_limit: int,
     wait_ms: int,
     poll_ms: int,
+    scroll_steps: int,
+    scroll_pause_ms: int,
+    rank: bool,
     automation: str,
 ) -> dict[str, Any]:
-    items, attempts, waited_ms = _evaluate_items_with_wait(
+    items, attempts, waited_ms, scrolls_performed = _evaluate_items_with_wait(
         page=page,
         target=target,
         safe_limit=safe_limit,
         wait_ms=wait_ms,
         poll_ms=poll_ms,
+        scroll_steps=scroll_steps,
+        scroll_pause_ms=scroll_pause_ms,
     )
+    if rank:
+        items = _rank_items(items)
     record_event("social_media_extract", platform=target, session_id=session_id, page_id=page_id, item_count=len(items))
     return {
         "ok": True,
@@ -270,6 +327,8 @@ def _extract_from_page(
         "item_count": len(items),
         "extract_attempts": attempts,
         "extract_waited_ms": waited_ms,
+        "scroll_steps": scrolls_performed,
+        "ranked": bool(rank),
     }
 
 
@@ -279,26 +338,83 @@ def _evaluate_items_with_wait(
     safe_limit: int,
     wait_ms: int,
     poll_ms: int,
-) -> tuple[list[dict[str, Any]], int, int]:
+    scroll_steps: int,
+    scroll_pause_ms: int,
+) -> tuple[list[dict[str, Any]], int, int, int]:
     script = _EXTRACTORS[target]
     deadline = time.monotonic() + max(int(wait_ms), 0) / 1000
     poll_seconds = max(int(poll_ms), 0) / 1000
     attempts = 0
+    scrolls_performed = 0
     started_at = time.monotonic()
     items: list[dict[str, Any]] = []
 
     while True:
         attempts += 1
         raw_items = page.evaluate(script, safe_limit)
-        items = _normalize_items(raw_items, target, safe_limit)
+        items = _merge_items(items, _normalize_items(raw_items, target, safe_limit), safe_limit)
         if items or time.monotonic() >= deadline:
-            waited_ms = int((time.monotonic() - started_at) * 1000)
-            return items, attempts, waited_ms
+            break
         sleep_seconds = min(poll_seconds, max(deadline - time.monotonic(), 0))
         if sleep_seconds <= 0:
-            waited_ms = int((time.monotonic() - started_at) * 1000)
-            return items, attempts, waited_ms
+            break
         time.sleep(sleep_seconds)
+    for _ in range(max(int(scroll_steps), 0)):
+        if len(items) >= safe_limit:
+            break
+        scroll_result = _scroll_page(page)
+        scrolls_performed += 1
+        pause_seconds = max(int(scroll_pause_ms), 0) / 1000
+        if pause_seconds:
+            time.sleep(pause_seconds)
+        attempts += 1
+        raw_items = page.evaluate(script, safe_limit)
+        before_count = len(items)
+        items = _merge_items(items, _normalize_items(raw_items, target, safe_limit), safe_limit)
+        if len(items) == before_count and _scroll_is_exhausted(scroll_result):
+            break
+    waited_ms = int((time.monotonic() - started_at) * 1000)
+    return items[:safe_limit], attempts, waited_ms, scrolls_performed
+
+
+def _scroll_page(page: Any) -> dict[str, Any]:
+    try:
+        result = page.evaluate(_SCROLL_SCRIPT)
+    except TypeError:
+        result = page.evaluate(_SCROLL_SCRIPT, None)
+    return result if isinstance(result, dict) else {}
+
+
+def _scroll_is_exhausted(scroll_result: dict[str, Any]) -> bool:
+    before_y = float(scroll_result.get("beforeY") or 0)
+    after_y = float(scroll_result.get("afterY") or 0)
+    before_height = float(scroll_result.get("beforeHeight") or 0)
+    after_height = float(scroll_result.get("afterHeight") or 0)
+    return after_y <= before_y and after_height <= before_height
+
+
+def _merge_items(existing: list[dict[str, Any]], new_items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    merged = list(existing)
+    seen = {_item_key(item) for item in merged}
+    for item in new_items:
+        key = _item_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        item.setdefault("source_index", len(merged))
+        merged.append(item)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def _item_key(item: dict[str, Any]) -> str:
+    for key in ("url", "author_url"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return f"{key}:{value}"
+    text = str(item.get("text") or item.get("title") or "").strip().lower()
+    return f"text:{text[:180]}"
 
 
 def _playwright_session_snapshot(session_id: str) -> dict[str, Any]:
@@ -331,6 +447,9 @@ def _extract_from_reattached_cdp(
     safe_limit: int,
     wait_ms: int,
     poll_ms: int,
+    scroll_steps: int,
+    scroll_pause_ms: int,
+    rank: bool,
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     attached = _bs.browser_attach_cdp(
@@ -353,6 +472,9 @@ def _extract_from_reattached_cdp(
         safe_limit=safe_limit,
         wait_ms=wait_ms,
         poll_ms=poll_ms,
+        scroll_steps=scroll_steps,
+        scroll_pause_ms=scroll_pause_ms,
+        rank=rank,
         automation="cdp",
     )
     result["cdp_reattached"] = True
@@ -373,9 +495,15 @@ def social_search(
     width: int | str = "auto",
     height: int | str = "auto",
     wait_until: str = "domcontentloaded",
+    keep_open: bool = True,
+    scroll_steps: int | None = None,
+    scroll_pause_ms: int = _DEFAULT_SCROLL_PAUSE_MS,
+    rank: bool = True,
 ) -> dict[str, Any]:
     """Open a read-only social search in the agent browser and extract DOM results."""
     target = _platform(platform)
+    safe_limit = max(1, min(int(limit), 100))
+    resolved_scroll_steps = _resolve_scroll_steps(safe_limit, scroll_steps)
     url_info = social_platform_url(platform=target, query=query)
     started = agent_browser_start(
         platform=target,
@@ -390,6 +518,7 @@ def social_search(
         height=height,
         wait_until=wait_until,
     )
+    browser_stop: dict[str, Any] | None = None
     if not started.get("ok", True):
         return {
             **started,
@@ -401,12 +530,19 @@ def social_search(
             "browser_context": "agent_dedicated",
             "host_interactive": False,
         }
-    extracted = social_extract(
-        platform=target,
-        session_id=started["session_id"],
-        page_id=started.get("page_id"),
-        limit=limit,
-    )
+    try:
+        extracted = social_extract(
+            platform=target,
+            session_id=started["session_id"],
+            page_id=started.get("page_id"),
+            limit=safe_limit,
+            scroll_steps=resolved_scroll_steps,
+            scroll_pause_ms=scroll_pause_ms,
+            rank=rank,
+        )
+    finally:
+        if not keep_open:
+            browser_stop = agent_browser_stop(instance_name=started.get("instance_name") or instance_name, platform=target)
     return {
         **extracted,
         "ok": bool(extracted.get("ok", True)),
@@ -419,7 +555,17 @@ def social_search(
         "automation": started.get("automation") or extracted.get("automation") or "playwright",
         "host_interactive": False,
         "read_only": True,
+        "keep_open": bool(keep_open),
+        "browser_stop": browser_stop,
     }
+
+
+def _resolve_scroll_steps(limit: int, scroll_steps: int | None) -> int:
+    if scroll_steps is not None:
+        return max(int(scroll_steps), 0)
+    if limit <= 10:
+        return 0
+    return min(10, max(1, (limit - 1) // 5))
 
 
 def _normalize_items(raw_items: Any, platform: str, limit: int) -> list[dict[str, Any]]:
@@ -442,6 +588,71 @@ def _normalize_items(raw_items: Any, platform: str, limit: int) -> list[dict[str
         if normalized.get("text") or normalized.get("url") or normalized.get("title"):
             items.append(normalized)
     return items
+
+
+def _rank_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for fallback_index, item in enumerate(items):
+        metrics = _extract_metrics(item)
+        ranked = dict(item)
+        ranked["metrics"] = metrics
+        ranked["rank_score"] = _rank_score(metrics)
+        ranked.setdefault("source_index", fallback_index)
+        enriched.append(ranked)
+    ranked_items = sorted(enriched, key=lambda item: (-float(item.get("rank_score") or 0), int(item.get("source_index") or 0)))
+    for position, item in enumerate(ranked_items, start=1):
+        item["rank_position"] = position
+    return ranked_items
+
+
+def _extract_metrics(item: dict[str, Any]) -> dict[str, int]:
+    text = " | ".join(
+        str(item.get(key) or "")
+        for key in ("metrics_text", "metadata", "text", "title")
+    )
+    normalized = _normalize_metric_text(text)
+    metrics = {key: 0 for key in _METRIC_PATTERNS}
+    for metric, patterns in _METRIC_PATTERNS.items():
+        for pattern in patterns:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if not match:
+                continue
+            metrics[metric] = _parse_metric_number(match.group("value"), match.groupdict().get("suffix"))
+            break
+    return metrics
+
+
+def _normalize_metric_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    ascii_text = re.sub(r"['`]+", " ", ascii_text)
+    return re.sub(r"\s+", " ", ascii_text).strip().lower()
+
+
+def _parse_metric_number(value: str, suffix: str | None = None) -> int:
+    compact = re.sub(r"\s+", "", str(value or ""))
+    suffix_key = str(suffix or "").strip().lower()
+    if suffix_key:
+        compact = compact.replace(",", ".")
+    elif "," in compact and "." in compact:
+        compact = compact.replace(",", "")
+    elif "," in compact:
+        parts = compact.split(",")
+        compact = "".join(parts) if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]) else compact.replace(",", ".")
+    elif "." in compact:
+        parts = compact.split(".")
+        if len(parts) > 1 and all(len(part) == 3 for part in parts[1:]):
+            compact = "".join(parts)
+    try:
+        number = float(compact)
+    except ValueError:
+        return 0
+    multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(suffix_key, 1)
+    return int(number * multiplier)
+
+
+def _rank_score(metrics: dict[str, int]) -> float:
+    return round(sum(float(metrics.get(key) or 0) * weight for key, weight in _RANK_WEIGHTS.items()), 2)
 
 
 __all__ = [

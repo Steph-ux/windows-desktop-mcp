@@ -1030,6 +1030,79 @@ class TestSocialMediaReadOnly:
         assert result["extract_attempts"] == 3
         assert page.calls == 3
 
+    def test_social_extract_scrolls_and_accumulates_items(self):
+        """Extraction should accumulate unique items across DOM scroll snapshots."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakePage:
+            url = "https://x.com/search?q=codex"
+
+            def __init__(self):
+                self.article_calls = 0
+                self.scroll_calls = 0
+
+            def evaluate(self, script, _limit=None):
+                if "scrollBy" in script:
+                    self.scroll_calls += 1
+                    return {"beforeY": self.scroll_calls * 100, "afterY": self.scroll_calls * 900, "beforeHeight": 3000, "afterHeight": 4000}
+                self.article_calls += 1
+                if self.article_calls == 1:
+                    return [{"platform": "x", "text": "First", "url": "https://x.com/a/status/1"}]
+                return [
+                    {"platform": "x", "text": "First", "url": "https://x.com/a/status/1"},
+                    {"platform": "x", "text": "Second", "url": "https://x.com/a/status/2"},
+                ]
+
+        page = FakePage()
+        with patch.object(sm, "get_playwright_page", return_value=({"session_id": "s1"}, "p1", page)):
+            result = sm.social_extract(platform="x", session_id="s1", limit=2, scroll_steps=1, scroll_pause_ms=0)
+
+        assert result["ok"] is True
+        assert result["item_count"] == 2
+        assert [item["text"] for item in result["items"]] == ["First", "Second"]
+        assert result["scroll_steps"] == 1
+        assert page.scroll_calls == 1
+
+    def test_social_extract_ranks_items_from_metrics(self):
+        """Ranking should parse social metrics and sort the highest-signal items first."""
+        from desktop_mcp.tools import social_media as sm
+
+        class FakePage:
+            url = "https://x.com/search?q=codex"
+
+            def evaluate(self, _script, _limit):
+                return [
+                    {"platform": "x", "text": "Small", "url": "https://x.com/a/status/1", "metrics_text": "1 reply, 2 reposts, 3 likes, 4 bookmarks, 100 views"},
+                    {"platform": "x", "text": "Large", "url": "https://x.com/a/status/2", "metrics_text": "20 replies, 30 reposts, 400 likes, 50 bookmarks, 10K views"},
+                ]
+
+        page = FakePage()
+        with patch.object(sm, "get_playwright_page", return_value=({"session_id": "s1"}, "p1", page)):
+            result = sm.social_extract(platform="x", session_id="s1", limit=2)
+
+        assert result["ranked"] is True
+        assert result["items"][0]["text"] == "Large"
+        assert result["items"][0]["metrics"]["views"] == 10000
+        assert result["items"][0]["metrics"]["likes"] == 400
+        assert result["items"][0]["rank_score"] > result["items"][1]["rank_score"]
+
+    @pytest.mark.parametrize(
+        "item,metric,expected",
+        [
+            ({"platform": "youtube", "title": "Codex video", "metadata": "1.2K views"}, "views", 1200),
+            ({"platform": "tiktok", "text": "Codex clip 2.5M views 40K likes"}, "likes", 40000),
+            ({"platform": "instagram", "text": "Codex reel 12K likes 800 comments"}, "replies", 800),
+        ],
+    )
+    def test_social_ranking_parses_cross_platform_metrics(self, item, metric, expected):
+        """Ranking should work for read-only YouTube, TikTok, and Instagram DOM text."""
+        from desktop_mcp.tools import social_media as sm
+
+        ranked = sm._rank_items([item])
+
+        assert ranked[0]["metrics"][metric] == expected
+        assert ranked[0]["rank_position"] == 1
+
     def test_social_extract_reattaches_cdp_when_session_thread_is_stale(self):
         """CDP extraction should recover when a previous MCP call stored a dead Playwright thread."""
         from desktop_mcp.tools import social_media as sm
@@ -1094,7 +1167,69 @@ class TestSocialMediaReadOnly:
         start.assert_called_once()
         assert start.call_args.kwargs["url"] == "https://x.com/search?q=codex&src=typed_query&f=top"
         assert start.call_args.kwargs["headless"] is True
-        extract.assert_called_once_with(platform="x", session_id="s1", page_id="p1", limit=3)
+        extract.assert_called_once_with(
+            platform="x",
+            session_id="s1",
+            page_id="p1",
+            limit=3,
+            scroll_steps=0,
+            scroll_pause_ms=500,
+            rank=True,
+        )
+
+    def test_social_search_can_close_agent_browser_when_keep_open_false(self):
+        """Search should support one-shot mode that closes the dedicated browser afterward."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "p1",
+            "instance_name": "agent-social-x",
+            "browser_context": "agent_dedicated",
+            "host_interactive": False,
+            "url": "https://x.com/search?q=codex&src=typed_query&f=top",
+        }):
+            with patch.object(sm, "social_extract", return_value={
+                "ok": True,
+                "platform": "x",
+                "extraction_method": "dom",
+                "items": [],
+                "item_count": 0,
+            }):
+                with patch.object(sm, "agent_browser_stop", return_value={"closed": True, "instance_name": "agent-social-x"}) as stop:
+                    result = sm.social_search(platform="x", query="codex", keep_open=False)
+
+        assert result["keep_open"] is False
+        assert result["browser_stop"]["closed"] is True
+        stop.assert_called_once_with(instance_name="agent-social-x", platform="x")
+
+    def test_social_search_auto_scrolls_for_larger_result_limits(self):
+        """Search should request DOM scrolling automatically for 20-50 item read-only pulls."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "p1",
+            "browser_context": "agent_dedicated",
+            "host_interactive": False,
+            "url": "https://www.youtube.com/results?search_query=codex",
+        }):
+            with patch.object(sm, "social_extract", return_value={
+                "ok": True,
+                "platform": "youtube",
+                "extraction_method": "dom",
+                "items": [],
+                "item_count": 0,
+            }) as extract:
+                result = sm.social_search(platform="youtube", query="codex", limit=25)
+
+        assert result["ok"] is True
+        assert result["keep_open"] is True
+        assert extract.call_args.kwargs["limit"] == 25
+        assert extract.call_args.kwargs["scroll_steps"] == 4
+        assert extract.call_args.kwargs["rank"] is True
 
     def test_social_search_can_request_cdp_agent_browser(self):
         """Search should pass CDP mode through for login-sensitive social profiles."""

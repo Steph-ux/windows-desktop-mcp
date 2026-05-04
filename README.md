@@ -96,7 +96,16 @@ social_media -> search(platform="instagram", query="codex", limit=10)
 social_media -> extract(platform="youtube_studio", session_id="...")
 ```
 
-These actions are designed for model planning: `social_media/search` and `social_media/extract` are `read` risk, non-host-interactive, and return structured items with `extraction_method="dom"`.
+For higher-volume read-only discovery, keep the dedicated browser warm and let the DOM extractor scroll and rank results:
+
+```python
+social_media -> search(platform="x", query="codex", limit=50, browser_engine="cdp", keep_open=True)
+social_media -> search(platform="youtube", query="codex", limit=25, scroll_steps=4)
+social_media -> search(platform="instagram", query="codex", limit=25, rank=True)
+social_media -> search(platform="tiktok", query="codex", limit=25, keep_open=False)
+```
+
+These actions are designed for model planning: `social_media/search` and `social_media/extract` are `read` risk, non-host-interactive, and return structured items with `extraction_method="dom"`. When ranking is enabled, items include `metrics`, `rank_score`, and `rank_position` parsed from views, likes, replies/comments, reposts/shares, and bookmarks/saves where the platform exposes them in visible DOM text.
 
 ## Workflow Templates
 
