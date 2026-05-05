@@ -1291,6 +1291,50 @@ class TestAgentBrowser:
         assert result["automation"] == "cdp"
         launch.assert_called_once()
 
+    def test_agent_browser_start_cdp_cleans_stale_known_instance_timeout(self):
+        """A stale warm CDP instance should be closed by MCP instance name before relaunch."""
+        from desktop_mcp.tools import agent_browser as ab
+
+        target_url = "https://x.com/search?q=codex&src=typed_query&f=top"
+        stale_error = TimeoutError("BrowserType.connect_over_cdp: Timeout 30000ms exceeded")
+        with patch.object(ab._bs, "browser_create_profile", return_value={"ok": True, "name": "agent-social-x-cdp"}):
+            with patch.object(ab, "_attach_known_cdp_instance", side_effect=stale_error):
+                with patch.object(ab._bs, "browser_stop_instance_and_browser", return_value={
+                    "instance_name": "agent-social-x-cdp",
+                    "closed": True,
+                    "browser_closed": True,
+                    "browser_pid": 16176,
+                }) as cleanup:
+                    with patch.object(ab._bs, "browser_list_endpoints", return_value={"count": 0, "endpoints": []}):
+                        with patch.object(ab._bs, "browser_launch_and_attach", return_value={
+                            "ok": True,
+                            "session_id": "s1",
+                            "page_id": "p1",
+                            "url": target_url,
+                            "profile_name": "agent-social-x-cdp",
+                            "instance_name": "agent-social-x-cdp",
+                            "cdp_endpoint": "http://127.0.0.1:9333",
+                            "attached": True,
+                            "launched_debug_browser": True,
+                            "headless": False,
+                        }) as launch:
+                            result = ab.agent_browser_start(
+                                platform="x",
+                                url=target_url,
+                                profile_name="agent-social-x-cdp",
+                                instance_name="agent-social-x-cdp",
+                                browser_engine="cdp",
+                                debug_port=9333,
+                            )
+
+        assert result["ok"] is True
+        assert result["automation"] == "cdp"
+        assert result["cdp_cleanup"]["ok"] is True
+        assert result["cdp_cleanup"]["result"]["browser_closed"] is True
+        assert result["cdp_recreated"] is True
+        cleanup.assert_called_once_with("agent-social-x-cdp")
+        launch.assert_called_once()
+
     def test_agent_browser_manifest_is_not_host_interactive(self):
         """The manifest should expose agent browser actions without host UI confirmation."""
         from desktop_mcp.tools_runtime import runtime_tool_manifest
@@ -1326,6 +1370,41 @@ class TestSocialMediaReadOnly:
         assert result["ok"] is True
         assert result["read_only"] is True
         assert result["url"] == expected
+
+    @pytest.mark.parametrize(
+        "url,item_type",
+        [
+            ("https://www.instagram.com/p/ABC123/", "post"),
+            ("https://www.instagram.com/reel/ABC123/", "reel"),
+            ("https://www.instagram.com/tv/ABC123/", "tv"),
+            ("https://www.instagram.com/openai/", "profile"),
+            ("https://www.instagram.com/explore/search/keyword/?q=codex", ""),
+            ("https://example.com/openai/", ""),
+        ],
+    )
+    def test_instagram_url_type_classifies_read_only_results(self, url, item_type):
+        """Instagram search fallback should accept content/profile results but reject shell links."""
+        from desktop_mcp.tools import social_media as sm
+
+        assert sm._instagram_url_type(url) == item_type
+
+    def test_social_normalize_instagram_profile_fallback_items(self):
+        """Instagram extraction should keep visible profile/search fallback items when media cards are absent."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw_items = [
+            {"platform": "instagram", "url": "https://www.instagram.com/openai/", "text": ""},
+            {"platform": "instagram", "url": "https://www.instagram.com/p/ABC123/", "text": "", "image_alt": "Codex launch reel"},
+        ]
+
+        items = sm._normalize_items(raw_items, "instagram", 10)
+
+        assert items[0]["item_type"] == "profile"
+        assert items[0]["text"] == "openai"
+        assert items[1]["item_type"] == "post"
+        assert items[1]["text"] == "Codex launch reel"
+        assert "main a[href]" in sm._INSTAGRAM_EXTRACTOR
+        assert "item_type === 'profile'" in sm._INSTAGRAM_EXTRACTOR
 
     def test_social_extract_x_reads_articles_from_dom(self):
         """X extraction should evaluate the page DOM directly instead of OCR."""

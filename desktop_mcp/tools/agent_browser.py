@@ -54,6 +54,62 @@ def _run_browser_call(fn, /, *args, **kwargs):
         return executor.submit(lambda: fn(*args, **kwargs)).result()
 
 
+def _is_stale_cdp_attach_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return (
+        ("connect_over_cdp" in text and "timeout" in text)
+        or ("browserType.connect_over_cdp".lower() in text and "timeout" in text)
+        or ("websocket" in text and "timeout" in text and "cdp" in text)
+    )
+
+
+def _cleanup_stale_cdp_instance(instance_name: str, reason: str) -> dict[str, Any]:
+    cleanup = {
+        "attempted": False,
+        "ok": False,
+        "instance_name": instance_name,
+        "reason": reason,
+    }
+    if not instance_name:
+        cleanup["error"] = "missing_instance_name"
+        return cleanup
+    try:
+        result = _run_browser_call(_bs.browser_stop_instance_and_browser, instance_name)
+        cleanup.update({"attempted": True, "ok": True, "result": result})
+    except Exception as exc:
+        cleanup.update({"attempted": True, "ok": False, "error": str(exc), "error_type": type(exc).__name__})
+    record_event("agent_browser_cdp_cleanup", **cleanup)
+    return cleanup
+
+
+def _launch_and_attach_cdp(
+    *,
+    browser: str,
+    cdp_port: int,
+    target_url: str,
+    resolved_profile: str,
+    resolved_instance: str,
+    width: int | str,
+    height: int | str,
+    startup_wait_ms: int,
+    init_script_paths: list[str] | None,
+    grant_permissions: list[str] | None,
+) -> dict[str, Any]:
+    return _run_browser_call(
+        _bs.browser_launch_and_attach,
+        browser=browser,
+        port=cdp_port,
+        url=target_url,
+        profile_name=resolved_profile,
+        instance_name=resolved_instance,
+        width=width,
+        height=height,
+        startup_wait_ms=startup_wait_ms,
+        init_script_paths=init_script_paths,
+        grant_permissions=grant_permissions,
+    )
+
+
 def _navigate_started_browser(started: dict[str, Any], target_url: str, wait_until: str) -> tuple[dict[str, Any], bool, str | None]:
     if not target_url or not started.get("session_id") or started.get("url") == target_url:
         return started, bool(target_url and started.get("url") == target_url), None
@@ -243,6 +299,8 @@ def agent_browser_start(
         cdp_port = int(debug_port)
         started: dict[str, Any] | None = None
         cdp_reattached = False
+        cdp_cleanup: dict[str, Any] | None = None
+        cdp_recreated = False
         try:
             started = _attach_known_cdp_instance(
                 browser=browser,
@@ -254,7 +312,9 @@ def agent_browser_start(
                 grant_permissions=grant_permissions,
             )
             cdp_reattached = started is not None
-        except Exception:
+        except Exception as exc:
+            if _is_stale_cdp_attach_error(exc):
+                cdp_cleanup = _cleanup_stale_cdp_instance(resolved_instance, "known_instance_attach_timeout")
             started = None
         endpoints = {"count": 0, "endpoints": []}
         if started is None:
@@ -276,22 +336,42 @@ def agent_browser_start(
                         grant_permissions=grant_permissions,
                     )
                     cdp_reattached = True
-                except Exception:
+                except Exception as exc:
+                    if _is_stale_cdp_attach_error(exc):
+                        cdp_cleanup = cdp_cleanup or _cleanup_stale_cdp_instance(resolved_instance, "discovered_endpoint_attach_timeout")
                     started = None
         if started is None:
-            started = _run_browser_call(
-                _bs.browser_launch_and_attach,
-                browser=browser,
-                port=cdp_port,
-                url=target_url,
-                profile_name=resolved_profile,
-                instance_name=resolved_instance,
-                width=width,
-                height=height,
-                startup_wait_ms=startup_wait_ms,
-                init_script_paths=init_script_paths,
-                grant_permissions=grant_permissions,
-            )
+            try:
+                started = _launch_and_attach_cdp(
+                    browser=browser,
+                    cdp_port=cdp_port,
+                    target_url=target_url,
+                    resolved_profile=resolved_profile,
+                    resolved_instance=resolved_instance,
+                    width=width,
+                    height=height,
+                    startup_wait_ms=startup_wait_ms,
+                    init_script_paths=init_script_paths,
+                    grant_permissions=grant_permissions,
+                )
+                cdp_recreated = bool(cdp_cleanup)
+            except Exception as exc:
+                if not _is_stale_cdp_attach_error(exc):
+                    raise
+                cdp_cleanup = cdp_cleanup or _cleanup_stale_cdp_instance(resolved_instance, "launch_attach_timeout")
+                started = _launch_and_attach_cdp(
+                    browser=browser,
+                    cdp_port=cdp_port,
+                    target_url=target_url,
+                    resolved_profile=resolved_profile,
+                    resolved_instance=resolved_instance,
+                    width=width,
+                    height=height,
+                    startup_wait_ms=startup_wait_ms,
+                    init_script_paths=init_script_paths,
+                    grant_permissions=grant_permissions,
+                )
+                cdp_recreated = True
         started, navigated, navigation_error = _navigate_started_cdp(
             started,
             target_url,
@@ -324,6 +404,8 @@ def agent_browser_start(
             "browser_engine": "cdp",
             "cdp_direct": True,
             "cdp_reattached": cdp_reattached,
+            "cdp_cleanup": cdp_cleanup,
+            "cdp_recreated": cdp_recreated,
             "new_tab_if_needed": bool(new_tab_if_needed),
             "created_target": bool(started.get("created_target")),
             "host_interactive": False,

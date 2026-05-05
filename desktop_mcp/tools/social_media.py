@@ -8,7 +8,7 @@ import re
 import time
 import unicodedata
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from ..browser_core import get_playwright_page
 from ..cdp_client import (
@@ -134,17 +134,49 @@ _INSTAGRAM_EXTRACTOR = r"""
   const absolute = (href) => {
     try { return new URL(href, location.href).href; } catch { return href || null; }
   };
-  const links = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]'));
+  const blockedProfiles = new Set([
+    'about', 'accounts', 'api', 'blog', 'developer', 'direct', 'explore',
+    'help', 'legal', 'meta', 'oauth', 'p', 'privacy', 'reel', 'reels',
+    'stories', 'terms', 'tv', 'web'
+  ]);
+  const typeForUrl = (url) => {
+    try {
+      const parsed = new URL(url, location.href);
+      if (!/(^|\.)instagram\.com$/i.test(parsed.hostname)) return null;
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      if (parts[0] === 'p') return 'post';
+      if (parts[0] === 'reel') return 'reel';
+      if (parts[0] === 'tv') return 'tv';
+      if (parts.length === 1 && /^[A-Za-z0-9._]+$/.test(parts[0]) && !blockedProfiles.has(parts[0].toLowerCase())) return 'profile';
+    } catch {}
+    return null;
+  };
+  const links = Array.from(document.querySelectorAll('main a[href], article a[href], a[href]'));
   const seen = new Set();
-  return links.map((link, index) => {
+  const items = [];
+  links.forEach((link, index) => {
     const url = absolute(link.getAttribute('href'));
-    const root = link.closest('article, main, div') || link;
-    const text = clean(root.innerText || root.textContent || link.getAttribute('aria-label') || '');
+    const item_type = typeForUrl(url);
+    if (!url || !item_type || seen.has(url)) return;
+    const root = link.closest('article, [role="button"], main, div') || link;
     const image_alt = clean(link.querySelector('img')?.getAttribute('alt'));
-    if (!url || seen.has(url)) return null;
+    const aria = clean(link.getAttribute('aria-label'));
+    const linkText = clean(link.innerText || link.textContent);
+    const rootText = clean(root.innerText || root.textContent);
+    const fallback = item_type === 'profile' ? url.split('instagram.com/')[1]?.split(/[/?#]/)[0] : '';
     seen.add(url);
-    return { platform: 'instagram', index, text: text || image_alt, url, image_alt, source: 'dom' };
-  }).filter(Boolean).slice(0, limit);
+    items.push({
+      platform: 'instagram',
+      index,
+      text: linkText || aria || image_alt || rootText || fallback || '',
+      url,
+      image_alt,
+      item_type,
+      source: 'dom'
+    });
+  });
+  const priority = { post: 0, reel: 1, tv: 2, profile: 3 };
+  return items.sort((a, b) => (priority[a.item_type] ?? 9) - (priority[b.item_type] ?? 9) || a.index - b.index).slice(0, limit);
 }
 """
 
@@ -324,6 +356,27 @@ _X_DETAIL_GENERIC_CHROME_MARKERS = (
 )
 _DEFAULT_SOCIAL_CDP_PROFILE = "agent-social-x-cdp"
 _DEFAULT_SOCIAL_CDP_INSTANCE = "agent-social-x-cdp"
+_INSTAGRAM_PROFILE_EXCLUSIONS = {
+    "about",
+    "accounts",
+    "api",
+    "blog",
+    "developer",
+    "direct",
+    "explore",
+    "help",
+    "legal",
+    "meta",
+    "oauth",
+    "p",
+    "privacy",
+    "reel",
+    "reels",
+    "stories",
+    "terms",
+    "tv",
+    "web",
+}
 
 _SCROLL_SCRIPT = r"""
 () => {
@@ -400,6 +453,41 @@ def _resolve_social_browser_identity(
 
 def _query(value: str) -> str:
     return quote_plus(str(value or "").strip())
+
+
+def _instagram_url_type(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return ""
+    host = parsed.netloc.lower()
+    if not (host == "instagram.com" or host.endswith(".instagram.com")):
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        return ""
+    if parts[0] == "p":
+        return "post"
+    if parts[0] == "reel":
+        return "reel"
+    if parts[0] == "tv":
+        return "tv"
+    if (
+        len(parts) == 1
+        and re.fullmatch(r"[A-Za-z0-9._]+", parts[0])
+        and parts[0].lower() not in _INSTAGRAM_PROFILE_EXCLUSIONS
+    ):
+        return "profile"
+    return ""
+
+
+def _instagram_profile_name(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    return parts[0] if len(parts) == 1 else ""
 
 
 def social_platform_url(platform: str, query: str = "", mode: str = "search") -> dict[str, Any]:
@@ -1337,6 +1425,14 @@ def _normalize_items(raw_items: Any, platform: str, limit: int) -> list[dict[str
             normalized["text"] = str(normalized["text"]).strip()
         if normalized.get("title") is not None:
             normalized["title"] = str(normalized["title"]).strip()
+        if platform == "instagram":
+            item_type = str(normalized.get("item_type") or _instagram_url_type(str(normalized.get("url") or ""))).strip()
+            if item_type:
+                normalized["item_type"] = item_type
+            if not normalized.get("text") and normalized.get("image_alt"):
+                normalized["text"] = str(normalized["image_alt"]).strip()
+            if item_type == "profile" and not normalized.get("text"):
+                normalized["text"] = _instagram_profile_name(str(normalized.get("url") or ""))
         if not normalized.get("text") and normalized.get("title"):
             normalized["text"] = normalized["title"]
         if normalized.get("text") or normalized.get("url") or normalized.get("title"):
