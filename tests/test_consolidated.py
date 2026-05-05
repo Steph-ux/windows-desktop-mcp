@@ -2210,6 +2210,86 @@ class TestSocialMediaReadOnly:
         assert start.call_args.kwargs["debug_port"] == 9333
         assert start.call_args.kwargs["new_tab_if_needed"] is True
 
+    def test_social_search_cdp_timeout_returns_structured_empty_result(self):
+        """Transient CDP extraction timeouts should not make search fail the whole mission."""
+        from desktop_mcp.tools import social_media as sm
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "youtube-tab",
+            "browser_context": "agent_dedicated",
+            "automation": "cdp",
+            "host_interactive": False,
+            "profile_name": "agent-social-x-cdp",
+            "instance_name": "agent-social-x-cdp",
+            "cdp_endpoint": "http://127.0.0.1:9333",
+            "url": "https://www.youtube.com/results?search_query=codex",
+        }):
+            with patch.object(sm, "_extract_from_cdp_endpoint", side_effect=TimeoutError("Connection timed out")) as extract:
+                result = sm.social_search(platform="youtube", query="codex", limit=3)
+
+        assert result["ok"] is True
+        assert result["item_count"] == 0
+        assert result["extract_error"] == "Connection timed out"
+        assert result["extract_errors"][0]["phase"] == "search_extract"
+        assert extract.call_count == 2
+
+    def test_social_search_instagram_filters_generic_items_and_tries_hashtag_fallback(self):
+        """Instagram should not present navigation/profile chrome as sourced evidence."""
+        from desktop_mcp.tools import social_media as sm
+
+        generic = {
+            "ok": True,
+            "platform": "instagram",
+            "page_id": "search-tab",
+            "extraction_method": "dom",
+            "automation": "cdp",
+            "cdp_direct": True,
+            "items": [
+                {"platform": "instagram", "text": "Profil", "url": "https://www.instagram.com/stephane_assogba11/", "image_alt": "Photo de profil de stephane_assogba11", "item_type": "profile"},
+                {"platform": "instagram", "text": "Populaire", "url": "https://www.instagram.com/popular/", "item_type": "profile"},
+            ],
+            "item_count": 2,
+        }
+        hashtag = {
+            "ok": True,
+            "platform": "instagram",
+            "page_id": "tag-tab",
+            "extraction_method": "dom",
+            "automation": "cdp",
+            "cdp_direct": True,
+            "items": [
+                {"platform": "instagram", "text": "Codex post", "url": "https://www.instagram.com/p/ABC123/", "item_type": "post"},
+            ],
+            "item_count": 1,
+        }
+
+        with patch.object(sm, "agent_browser_start", return_value={
+            "ok": True,
+            "session_id": "s1",
+            "page_id": "search-tab",
+            "browser_context": "agent_dedicated",
+            "automation": "cdp",
+            "host_interactive": False,
+            "profile_name": "agent-social-x-cdp",
+            "instance_name": "agent-social-x-cdp",
+            "cdp_endpoint": "http://127.0.0.1:9333",
+            "url": "https://www.instagram.com/explore/search/keyword/?q=codex+improvements",
+        }):
+            with patch.object(sm, "_extract_from_cdp_endpoint", side_effect=[generic, hashtag]) as extract:
+                with patch.object(sm, "cdp_navigate", return_value={"ok": True, "cdp_target_id": "tag-tab"}) as navigate:
+                    result = sm.social_search(platform="instagram", query="codex improvements", limit=3)
+
+        assert result["ok"] is True
+        assert result["item_count"] == 1
+        assert result["items"][0]["url"] == "https://www.instagram.com/p/ABC123/"
+        assert result["quality_filtered"] == 0
+        assert result["search_fallback_url"] == "https://www.instagram.com/explore/tags/codeximprovements/"
+        assert result["search_fallbacks"] == ["https://www.instagram.com/explore/tags/codeximprovements/"]
+        assert extract.call_count == 2
+        navigate.assert_called_once()
+
     def test_social_search_include_details_enriches_only_ranked_detail_limit(self):
         """Search should keep details opt-in and enrich only the top ranked results."""
         from desktop_mcp.tools import social_media as sm

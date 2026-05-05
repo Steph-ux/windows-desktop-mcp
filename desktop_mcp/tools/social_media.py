@@ -1342,22 +1342,55 @@ def social_search(
             "browser_context": "agent_dedicated",
             "host_interactive": False,
         }
+    extraction_errors: list[dict[str, str]] = []
+    search_fallbacks: list[str] = []
     try:
         endpoint = _cdp_endpoint(started)
         if (started.get("automation") == "cdp" or str(browser_engine).strip().lower() == "cdp") and endpoint:
-            extracted = _extract_from_cdp_endpoint(
+            extracted = _extract_search_from_cdp_with_retry(
                 target=target,
-                session_id=started["session_id"],
-                page_id=started.get("page_id"),
+                started=started,
                 endpoint=endpoint,
                 target_url=url_info["url"],
                 safe_limit=safe_limit,
-                wait_ms=_DEFAULT_EXTRACT_WAIT_MS,
-                poll_ms=_DEFAULT_EXTRACT_POLL_MS,
-                scroll_steps=resolved_scroll_steps,
+                resolved_scroll_steps=resolved_scroll_steps,
                 scroll_pause_ms=scroll_pause_ms,
                 rank=rank,
+                extraction_errors=extraction_errors,
             )
+            extracted = _filter_extracted_items(extracted, target, safe_limit, rank=rank)
+            if target == "instagram" and not extracted.get("items"):
+                for fallback_url in _instagram_fallback_search_urls(query):
+                    search_fallbacks.append(fallback_url)
+                    try:
+                        navigation = cdp_navigate(
+                            endpoint=endpoint,
+                            url=fallback_url,
+                            preferred_url=fallback_url,
+                            page_id=started.get("page_id"),
+                            wait_ms=10000,
+                            new_tab_if_needed=True,
+                        )
+                        fallback = _extract_search_from_cdp_with_retry(
+                            target=target,
+                            started=started,
+                            endpoint=endpoint,
+                            target_url=fallback_url,
+                            safe_limit=safe_limit,
+                            resolved_scroll_steps=max(resolved_scroll_steps, 1),
+                            scroll_pause_ms=scroll_pause_ms,
+                            rank=rank,
+                            extraction_errors=extraction_errors,
+                            page_id=navigation.get("cdp_target_id") or started.get("page_id"),
+                        )
+                        fallback = _filter_extracted_items(fallback, target, safe_limit, rank=rank)
+                    except Exception as exc:
+                        extraction_errors.append({"phase": "instagram_fallback", "url": fallback_url, "error": str(exc), "type": type(exc).__name__})
+                        continue
+                    if fallback.get("items"):
+                        extracted = fallback
+                        extracted["search_fallback_url"] = fallback_url
+                        break
         else:
             extracted = social_extract(
                 platform=target,
@@ -1368,6 +1401,7 @@ def social_search(
                 scroll_pause_ms=scroll_pause_ms,
                 rank=rank,
             )
+            extracted = _filter_extracted_items(extracted, target, safe_limit, rank=rank)
         if include_details:
             extracted["items"] = _enrich_items_with_details(
                 items=list(extracted.get("items") or []),
@@ -1384,6 +1418,10 @@ def social_search(
             extracted["item_count"] = len(extracted["items"])
             extracted["details_included"] = True
             extracted["detail_limit"] = max(int(detail_limit), 0)
+        if extraction_errors:
+            extracted["extract_errors"] = extraction_errors
+        if search_fallbacks:
+            extracted["search_fallbacks"] = search_fallbacks
     finally:
         if not keep_open:
             browser_stop = agent_browser_stop(instance_name=started.get("instance_name") or resolved_instance_name, platform=target)
@@ -1402,6 +1440,142 @@ def social_search(
         "keep_open": bool(keep_open),
         "browser_stop": browser_stop,
     }
+
+
+def _extract_search_from_cdp_with_retry(
+    target: str,
+    started: dict[str, Any],
+    endpoint: str,
+    target_url: str,
+    safe_limit: int,
+    resolved_scroll_steps: int,
+    scroll_pause_ms: int,
+    rank: bool,
+    extraction_errors: list[dict[str, str]],
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_page_id = page_id or started.get("page_id")
+    for attempt in range(2):
+        try:
+            return _extract_from_cdp_endpoint(
+                target=target,
+                session_id=started["session_id"],
+                page_id=resolved_page_id,
+                endpoint=endpoint,
+                target_url=target_url,
+                safe_limit=safe_limit,
+                wait_ms=_DEFAULT_EXTRACT_WAIT_MS,
+                poll_ms=_DEFAULT_EXTRACT_POLL_MS,
+                scroll_steps=resolved_scroll_steps,
+                scroll_pause_ms=scroll_pause_ms,
+                rank=rank,
+            )
+        except Exception as exc:
+            if not _is_transient_cdp_error(exc):
+                raise
+            extraction_errors.append({"phase": "search_extract", "attempt": str(attempt + 1), "error": str(exc), "type": type(exc).__name__})
+            if attempt == 0:
+                time.sleep(0.25)
+                continue
+            return _empty_extract_result(
+                target=target,
+                started=started,
+                target_url=target_url,
+                endpoint=endpoint,
+                page_id=resolved_page_id,
+                exc=exc,
+            )
+    raise RuntimeError("unreachable")
+
+
+def _empty_extract_result(
+    target: str,
+    started: dict[str, Any],
+    target_url: str,
+    endpoint: str,
+    page_id: str | None,
+    exc: Exception,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "platform": target,
+        "session_id": started.get("session_id"),
+        "page_id": page_id,
+        "url": target_url,
+        "title": started.get("title"),
+        "read_only": True,
+        "browser_context": "agent_dedicated",
+        "automation": "cdp",
+        "browser_engine": "cdp",
+        "host_interactive": False,
+        "extraction_method": "dom",
+        "source": "dom",
+        "cdp_direct": True,
+        "cdp_endpoint": endpoint,
+        "cdp_target_id": page_id,
+        "items": [],
+        "item_count": 0,
+        "extract_attempts": 2,
+        "extract_waited_ms": 0,
+        "scroll_steps": 0,
+        "ranked": False,
+        "extract_error": str(exc),
+        "extract_error_type": type(exc).__name__,
+    }
+
+
+def _filter_extracted_items(extracted: dict[str, Any], target: str, limit: int, rank: bool) -> dict[str, Any]:
+    items = extracted.get("items") if isinstance(extracted.get("items"), list) else []
+    filtered = _filter_items_for_platform(items, target, limit)
+    if rank:
+        filtered = _rank_items(filtered)
+    result = dict(extracted)
+    result["items"] = filtered[:limit]
+    result["item_count"] = len(result["items"])
+    result["quality_filtered"] = len(items) - len(result["items"])
+    return result
+
+
+def _filter_items_for_platform(items: list[dict[str, Any]], target: str, limit: int) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if target == "instagram":
+            item_type = str(item.get("item_type") or _instagram_url_type(str(item.get("url") or ""))).strip()
+            if str(item.get("url") or "").strip() and not item_type:
+                continue
+            candidate = dict(item)
+            if item_type:
+                candidate["item_type"] = item_type
+            if item_type == "profile" and _instagram_profile_item_is_generic_navigation(candidate):
+                continue
+            item = candidate
+        filtered.append(item)
+        if len(filtered) >= limit:
+            break
+    return filtered
+
+
+def _instagram_fallback_search_urls(query: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z0-9_]+", str(query or "").lower())
+    candidates: list[str] = []
+    if tokens:
+        compact = "".join(tokens[:3])
+        first = tokens[0]
+        for tag in (compact, first):
+            if tag and tag not in candidates:
+                candidates.append(tag)
+    return [f"https://www.instagram.com/explore/tags/{tag}/" for tag in candidates]
+
+
+def _is_transient_cdp_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return (
+        "websockettimeoutexception" in text
+        or "connection timed out" in text
+        or ("timed out" in text and ("websocket" in text or "cdp" in text or "connection" in text))
+    )
 
 
 def _enrich_items_with_details(
