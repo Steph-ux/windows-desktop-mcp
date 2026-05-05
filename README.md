@@ -118,6 +118,7 @@ Use `runtime -> evals` after a server restart to get a structured `prod-ready`, 
 ```python
 runtime -> evals(suite="quick")
 runtime -> evals(suite="social", platforms=["x", "youtube"], query="codex")
+runtime -> evals(suite="mission", goal="Find exact Codex improvement posts", platforms=["x", "youtube"], risk_mode="read-only", max_actions=8)
 runtime -> evals(suite="all", limit=3, detail_limit=1)
 ```
 
@@ -126,6 +127,22 @@ Suites:
 - `quick`: manifest, health, risk policy, and confirmation guards; no network.
 - `social`: live read-only CDP extraction for X, YouTube, TikTok, and Instagram with checks for no host mouse/keyboard, ranking, non-empty extraction, and detail `quality`.
 - `windows`: desktop-app safety checks plus Notepad/File Explorer/Calculator scenario plans. It does not type, focus, or launch apps by itself; host-interactive app evals must be run as individual confirmed `workflow.act_verify` steps.
+- `mission`: dry-run model mission templates. It returns bounded plans, proof expectations, denied actions, risk checks, and output contracts for real tasks such as cross-platform social research, detail drilldown, desktop read-only inventory, and host-confirmed observe -> act -> verify flows. The eval does not execute the mission by itself.
+
+Mission evals are designed for models: the MCP provides plans, eyes, arms, proofs, and guardrails; the model still chooses each next action.
+
+```python
+runtime -> evals(
+    suite="mission",
+    goal="Research Codex improvements and return the five best sourced posts",
+    platforms=["x", "youtube", "tiktok", "instagram"],
+    query="codex",
+    risk_mode="read-only",
+    max_actions=8,
+)
+```
+
+Use `risk_mode="medium"` only when the model should see host-confirmed templates such as Notepad observe -> act -> verify or operator evidence sessions. Those templates still require explicit `host`/`user` confirmation before any host-interactive execution.
 
 ## Desktop Input Safety
 

@@ -586,6 +586,9 @@ class TestRuntimeEvals:
         assert evals["host_interactive"] is False
         assert "suite" in evals["signature"]
         assert "platforms" in evals["signature"]
+        assert "goal" in evals["signature"]
+        assert "risk_mode" in evals["signature"]
+        assert "max_actions" in evals["signature"]
 
     def test_runtime_evals_quick_reports_prod_ready_with_guards(self):
         """Quick eval should prove manifest, risk, and confirmation gates without network."""
@@ -695,6 +698,66 @@ class TestRuntimeEvals:
         assert "file_explorer_read_only_observe" in scenario_ids
         assert "calculator_focus_block" in scenario_ids
         assert windows["live_execution"]["enabled"] is False
+
+    def test_runtime_evals_mission_returns_read_only_model_plans(self):
+        """Mission eval should return bounded read-only templates a model can execute explicitly."""
+        from desktop_mcp import evals as ev
+
+        with patch.object(ev, "record_event", return_value={}):
+            result = ev.runtime_evals(
+                suite="mission",
+                platforms="x,youtube",
+                query="codex",
+                limit=5,
+                detail_limit=1,
+                goal="Find exact Codex improvement posts",
+                max_actions=6,
+            )
+
+        assert result["ok"] is True
+        assert result["status"] == "prod-ready"
+        mission = result["suites"]["mission"]
+        assert mission["goal"] == "Find exact Codex improvement posts"
+        assert mission["risk_ceiling"] == "read"
+        assert len(mission["plan"]) <= 6
+        assert mission["live_execution"]["enabled"] is False
+        assert mission["output_contract"]["evidence"]
+        assert all(step["risk"] == "read" for step in mission["plan"])
+        assert all(step["host_interactive"] is False for step in mission["plan"])
+        assert {step["kwargs"].get("platform") for step in mission["plan"] if step["tool"] == "social_media" and isinstance(step.get("kwargs"), dict)} >= {"x", "youtube"}
+        names = {check["name"] for check in result["checks"]}
+        assert "mission.actions.within_risk_budget" in names
+        assert "mission.structured_proofs_present" in names
+        assert "mission.denied_actions_absent" in names
+
+    def test_runtime_evals_mission_medium_mode_includes_confirmed_templates(self):
+        """Medium-risk mission mode should expose host-confirmed/recorded templates without auto-running them."""
+        from desktop_mcp import evals as ev
+
+        with patch.object(ev, "record_event", return_value={}):
+            result = ev.runtime_evals(
+                suite="mission",
+                platforms=["x"],
+                query="codex",
+                risk_mode="medium",
+                max_actions=20,
+            )
+
+        assert result["ok"] is True
+        assert result["status"] == "prod-ready"
+        mission = result["suites"]["mission"]
+        template_ids = {template["id"] for template in mission["selected_templates"]}
+        assert "host_confirmed_notepad_verify" in template_ids
+        assert "operator_evidence_session" in template_ids
+        sensitive_steps = [step for step in mission["plan"] if step.get("sensitive_action")]
+        assert sensitive_steps
+        assert all(step["requires_host_confirmation"] is True for step in sensitive_steps)
+
+    def test_runtime_evals_all_includes_mission_suite(self):
+        """The full restart report should include mission planning checks."""
+        from desktop_mcp import evals as ev
+
+        assert ev._parse_suites("all") == ["quick", "social", "windows", "mission"]
 
 
 class TestOperatorLayer:
