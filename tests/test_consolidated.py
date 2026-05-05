@@ -1570,6 +1570,8 @@ class TestSocialMediaReadOnly:
         assert result["ok"] is True
         assert result["text"].startswith("Nick Spisak How to Build Your Second Brain")
         assert result["full_text"].startswith("Nick Spisak How to Build Your Second Brain")
+        assert result["quality"] == "clean"
+        assert result["quality_notes"] == []
         assert result["metrics"]["bookmarks"] == 16138
         assert fake_cdp.detail_calls == 2
 

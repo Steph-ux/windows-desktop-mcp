@@ -767,6 +767,8 @@ def _extract_detail_from_cdp_endpoint(
         "metrics_text": detail.get("metrics_text") or "",
         "links": detail.get("links") or [],
         "media": detail.get("media") or [],
+        "quality": detail.get("quality") or "clean",
+        "quality_notes": detail.get("quality_notes") or [],
         "read_only": True,
         "browser_context": "agent_dedicated",
         "automation": "cdp",
@@ -825,6 +827,9 @@ def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: s
         detail["text"] = str(detail["full_text"])[:4000]
     if platform == "x":
         _normalize_x_detail_quality(detail)
+    else:
+        detail.setdefault("quality", "clean")
+        detail.setdefault("quality_notes", [])
     for key in ("text", "full_text"):
         if detail.get(key):
             detail[key] = str(detail[key])[:_MAX_DETAIL_TEXT_CHARS]
@@ -1141,6 +1146,8 @@ def _extract_detail_from_playwright(
         "metrics_text": detail.get("metrics_text") or "",
         "links": detail.get("links") or [],
         "media": detail.get("media") or [],
+        "quality": detail.get("quality") or "clean",
+        "quality_notes": detail.get("quality_notes") or [],
         "read_only": True,
         "browser_context": "agent_dedicated",
         "automation": "playwright",
