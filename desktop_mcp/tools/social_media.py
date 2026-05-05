@@ -136,8 +136,13 @@ _INSTAGRAM_EXTRACTOR = r"""
   };
   const blockedProfiles = new Set([
     'about', 'accounts', 'api', 'blog', 'developer', 'direct', 'explore',
-    'help', 'legal', 'meta', 'oauth', 'p', 'privacy', 'reel', 'reels',
+    'help', 'legal', 'meta', 'oauth', 'p', 'popular', 'privacy', 'reel', 'reels',
     'stories', 'terms', 'tv', 'web'
+  ]);
+  const genericProfileLabels = new Set([
+    'accueil', 'create', 'créer', 'explore', 'explorer', 'home', 'messages',
+    'notifications', 'popular', 'populaire', 'profile', 'profil', 'reels',
+    'search', 'rechercher'
   ]);
   const typeForUrl = (url) => {
     try {
@@ -164,6 +169,8 @@ _INSTAGRAM_EXTRACTOR = r"""
     const linkText = clean(link.innerText || link.textContent);
     const rootText = clean(root.innerText || root.textContent);
     const fallback = item_type === 'profile' ? url.split('instagram.com/')[1]?.split(/[/?#]/)[0] : '';
+    const label = (linkText || aria || rootText || '').toLowerCase();
+    if (item_type === 'profile' && genericProfileLabels.has(label)) return;
     seen.add(url);
     items.push({
       platform: 'instagram',
@@ -369,6 +376,7 @@ _INSTAGRAM_PROFILE_EXCLUSIONS = {
     "meta",
     "oauth",
     "p",
+    "popular",
     "privacy",
     "reel",
     "reels",
@@ -376,6 +384,24 @@ _INSTAGRAM_PROFILE_EXCLUSIONS = {
     "terms",
     "tv",
     "web",
+}
+
+_INSTAGRAM_GENERIC_PROFILE_LABELS = {
+    "accueil",
+    "create",
+    "creer",
+    "explore",
+    "explorer",
+    "home",
+    "messages",
+    "notifications",
+    "popular",
+    "populaire",
+    "profile",
+    "profil",
+    "rechercher",
+    "reels",
+    "search",
 }
 
 _SCROLL_SCRIPT = r"""
@@ -488,6 +514,25 @@ def _instagram_profile_name(url: str) -> str:
         return ""
     parts = [part for part in parsed.path.split("/") if part]
     return parts[0] if len(parts) == 1 else ""
+
+
+def _instagram_profile_item_is_generic_navigation(item: dict[str, Any]) -> bool:
+    text = _ascii_lower(str(item.get("text") or item.get("title") or ""))
+    image_alt = _ascii_lower(str(item.get("image_alt") or ""))
+    if text in _INSTAGRAM_GENERIC_PROFILE_LABELS:
+        return True
+    return text in {"profil", "profile"} and "photo de profil" in image_alt
+
+
+def _youtube_title_is_duration_chrome(title: str) -> bool:
+    text = _ascii_lower(title)
+    return bool(re.fullmatch(r"[\d:\s]+(?:en cours de lecture|now playing)?", text) or "en cours de lecture" in text)
+
+
+def _ascii_lower(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_text).strip().lower()
 
 
 def social_platform_url(platform: str, query: str = "", mode: str = "search") -> dict[str, Any]:
@@ -1397,9 +1442,40 @@ def _enrich_items_with_details(
                 remaining -= 1
             except Exception as exc:
                 current["detail_error"] = str(exc)
+                current["detail"] = _fallback_detail_from_item(current, target, exc)
                 remaining -= 1
         enriched.append(current)
     return enriched
+
+
+def _fallback_detail_from_item(item: dict[str, Any], target: str, exc: Exception) -> dict[str, Any]:
+    """Return a model-facing partial detail when the detail page cannot be opened."""
+    raw = {
+        "platform": target,
+        "url": item.get("url") or "",
+        "title": item.get("title") or item.get("text") or "",
+        "author": item.get("channel") or item.get("author") or "",
+        "author_url": item.get("author_url") or "",
+        "text": item.get("text") or item.get("title") or item.get("metadata") or "",
+        "full_text": " ".join(str(item.get(key) or "").strip() for key in ("title", "text", "metadata", "metrics_text") if item.get(key)),
+        "metrics_text": item.get("metrics_text") or item.get("metadata") or "",
+        "links": [item.get("url")] if item.get("url") else [],
+        "media": [],
+        "quality": "partial",
+        "quality_notes": ["detail_error", "used_search_item_fallback"],
+    }
+    detail = _normalize_detail(raw, target, str(item.get("url") or ""))
+    detail["ok"] = True
+    detail["read_only"] = True
+    detail["browser_context"] = "agent_dedicated"
+    detail["automation"] = "cdp"
+    detail["browser_engine"] = "cdp"
+    detail["host_interactive"] = False
+    detail["extraction_method"] = "dom"
+    detail["source"] = "search_item_fallback"
+    detail["cdp_direct"] = True
+    detail["detail_error"] = str(exc)
+    return detail
 
 
 def _resolve_scroll_steps(limit: int, scroll_steps: int | None) -> int:
@@ -1425,14 +1501,25 @@ def _normalize_items(raw_items: Any, platform: str, limit: int) -> list[dict[str
             normalized["text"] = str(normalized["text"]).strip()
         if normalized.get("title") is not None:
             normalized["title"] = str(normalized["title"]).strip()
+        if platform == "youtube" and _youtube_title_is_duration_chrome(str(normalized.get("title") or "")):
+            metadata = str(normalized.get("metadata") or "").strip()
+            if metadata:
+                original_title = str(normalized.get("title") or "")
+                normalized["title"] = metadata
+                if not normalized.get("text") or normalized.get("text") == original_title:
+                    normalized["text"] = metadata
         if platform == "instagram":
             item_type = str(normalized.get("item_type") or _instagram_url_type(str(normalized.get("url") or ""))).strip()
+            if normalized.get("url") and not item_type:
+                continue
             if item_type:
                 normalized["item_type"] = item_type
             if not normalized.get("text") and normalized.get("image_alt"):
                 normalized["text"] = str(normalized["image_alt"]).strip()
             if item_type == "profile" and not normalized.get("text"):
                 normalized["text"] = _instagram_profile_name(str(normalized.get("url") or ""))
+            if item_type == "profile" and _instagram_profile_item_is_generic_navigation(normalized):
+                continue
         if not normalized.get("text") and normalized.get("title"):
             normalized["text"] = normalized["title"]
         if normalized.get("text") or normalized.get("url") or normalized.get("title"):

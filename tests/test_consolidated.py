@@ -1441,6 +1441,7 @@ class TestSocialMediaReadOnly:
             ("https://www.instagram.com/reel/ABC123/", "reel"),
             ("https://www.instagram.com/tv/ABC123/", "tv"),
             ("https://www.instagram.com/openai/", "profile"),
+            ("https://www.instagram.com/popular/", ""),
             ("https://www.instagram.com/explore/search/keyword/?q=codex", ""),
             ("https://example.com/openai/", ""),
         ],
@@ -1458,16 +1459,39 @@ class TestSocialMediaReadOnly:
         raw_items = [
             {"platform": "instagram", "url": "https://www.instagram.com/openai/", "text": ""},
             {"platform": "instagram", "url": "https://www.instagram.com/p/ABC123/", "text": "", "image_alt": "Codex launch reel"},
+            {"platform": "instagram", "url": "https://www.instagram.com/stephane_assogba11/", "text": "Profil", "image_alt": "Photo de profil de stephane_assogba11"},
+            {"platform": "instagram", "url": "https://www.instagram.com/popular/", "text": "Populaire"},
         ]
 
         items = sm._normalize_items(raw_items, "instagram", 10)
 
+        assert len(items) == 2
         assert items[0]["item_type"] == "profile"
         assert items[0]["text"] == "openai"
         assert items[1]["item_type"] == "post"
         assert items[1]["text"] == "Codex launch reel"
         assert "main a[href]" in sm._INSTAGRAM_EXTRACTOR
         assert "item_type === 'profile'" in sm._INSTAGRAM_EXTRACTOR
+        assert "genericProfileLabels" in sm._INSTAGRAM_EXTRACTOR
+
+    def test_social_normalize_youtube_replaces_duration_title_with_metadata(self):
+        """YouTube DOM sometimes exposes duration chrome where the title should be."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw_items = [
+            {
+                "platform": "youtube",
+                "title": "1:40 1:40 En cours de lecture",
+                "text": "1:40 1:40 En cours de lecture",
+                "metadata": "Codex for (almost) everything",
+                "url": "https://www.youtube.com/watch?v=Lm7-yFZ5fZQ",
+            }
+        ]
+
+        items = sm._normalize_items(raw_items, "youtube", 10)
+
+        assert items[0]["title"] == "Codex for (almost) everything"
+        assert items[0]["text"] == "Codex for (almost) everything"
 
     def test_social_extract_x_reads_articles_from_dom(self):
         """X extraction should evaluate the page DOM directly instead of OCR."""
@@ -2235,6 +2259,42 @@ class TestSocialMediaReadOnly:
         assert result["items"][0]["text"] == "First detail"
         assert result["items"][0]["detail"]["full_text"] == "First detail"
         assert "detail" not in result["items"][2]
+
+    def test_social_search_include_details_falls_back_to_search_item_on_detail_timeout(self):
+        """Detail timeouts should keep the ranked search item usable for model summaries."""
+        from desktop_mcp.tools import social_media as sm
+
+        items = [
+            {
+                "platform": "youtube",
+                "title": "Codex for (almost) everything",
+                "text": "Codex for (almost) everything",
+                "metadata": "OpenAI",
+                "url": "https://www.youtube.com/watch?v=Lm7-yFZ5fZQ",
+                "rank_position": 1,
+            }
+        ]
+
+        with patch.object(sm, "social_detail", side_effect=TimeoutError("Connection timed out")):
+            enriched = sm._enrich_items_with_details(
+                items=items,
+                target="youtube",
+                session_id="s1",
+                page_id="p1",
+                detail_limit=1,
+                profile_name="agent-social-x-cdp",
+                instance_name="agent-social-x-cdp",
+                browser="chrome",
+                browser_engine="cdp",
+                debug_port=9333,
+            )
+
+        assert enriched[0]["detail_error"] == "Connection timed out"
+        assert enriched[0]["detail"]["ok"] is True
+        assert enriched[0]["detail"]["quality"] == "partial"
+        assert enriched[0]["detail"]["source"] == "search_item_fallback"
+        assert enriched[0]["detail"]["text"] == "Codex for (almost) everything"
+        assert "used_search_item_fallback" in enriched[0]["detail"]["quality_notes"]
 
     def test_x_detail_filters_script_noise_and_falls_back_to_title_text(self):
         """X detail should never expose huge JS/bootstrap payloads as model-facing text."""
