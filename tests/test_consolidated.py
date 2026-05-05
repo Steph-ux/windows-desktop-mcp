@@ -2376,6 +2376,67 @@ class TestSocialMediaReadOnly:
         assert enriched[0]["detail"]["text"] == "Codex for (almost) everything"
         assert "used_search_item_fallback" in enriched[0]["detail"]["quality_notes"]
 
+    def test_social_detail_retries_transient_cdp_timeout(self):
+        """Transient CDP timeouts should retry detail extraction before failing over."""
+        from desktop_mcp.tools import social_media as sm
+
+        success = {
+            "ok": True,
+            "platform": "youtube",
+            "session_id": "s1",
+            "page_id": "p1",
+            "url": "https://www.youtube.com/watch?v=Lm7-yFZ5fZQ",
+            "title": "Codex for (almost) everything",
+            "author": "OpenAI",
+            "author_url": "https://www.youtube.com/@OpenAI",
+            "text": "Launch overview",
+            "full_text": "Codex for (almost) everything OpenAI Launch overview",
+            "metrics": {"views": 233000},
+            "metrics_text": "233K views",
+            "links": ["https://www.youtube.com/watch?v=Lm7-yFZ5fZQ"],
+            "media": [],
+            "quality": "clean",
+            "quality_notes": [],
+        }
+
+        with patch.object(sm, "_extract_detail_from_cdp_endpoint", side_effect=[TimeoutError("Connection timed out"), success]) as extract:
+            result = sm._extract_detail_from_cdp_with_retry(
+                target="youtube",
+                session_id="s1",
+                page_id="p1",
+                endpoint="http://127.0.0.1:9333",
+                target_url="https://www.youtube.com/watch?v=Lm7-yFZ5fZQ",
+                wait_ms=10000,
+                new_tab_if_needed=True,
+                force_new_tab=True,
+                close_after_extract=True,
+            )
+
+        assert extract.call_count == 2
+        assert result["ok"] is True
+        assert result["detail_retry_count"] == 1
+        assert result["title"] == "Codex for (almost) everything"
+
+    def test_youtube_detail_marks_title_only_payload_as_partial(self):
+        """Title-only YouTube detail should not be presented as a clean rich extraction."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw = {
+            "platform": "youtube",
+            "url": "https://www.youtube.com/watch?v=Lm7-yFZ5fZQ",
+            "title": "Codex for (almost) everything",
+            "text": "Codex for (almost) everything",
+            "full_text": "Codex for (almost) everything",
+            "author": "",
+            "metrics_text": "",
+            "links": ["https://www.youtube.com/watch?v=Lm7-yFZ5fZQ"],
+        }
+
+        detail = sm._normalize_detail(raw, "youtube", raw["url"])
+
+        assert detail["quality"] == "partial"
+        assert "missing_author_or_metrics" in detail["quality_notes"]
+
     def test_x_detail_filters_script_noise_and_falls_back_to_title_text(self):
         """X detail should never expose huge JS/bootstrap payloads as model-facing text."""
         from desktop_mcp.tools import social_media as sm

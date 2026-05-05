@@ -240,20 +240,48 @@ _YOUTUBE_DETAIL_EXTRACTOR = r"""
   const absolute = (href) => {
     try { return new URL(href, location.href).href; } catch { return href || null; }
   };
+  const attribute = (node, name) => node && typeof node.getAttribute === 'function' ? node.getAttribute(name) : '';
+  const metaContent = (...selectors) => {
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      const value = clean(attribute(node, 'content') || attribute(node, 'href') || node?.innerText || node?.textContent);
+      if (value) return value;
+    }
+    return '';
+  };
   const root = document.querySelector('ytd-watch-flexy, ytd-page-manager, main') || document.body;
-  const title = clean(root.querySelector('h1, #title h1, ytd-watch-metadata h1')?.innerText || document.title);
+  const title = clean(
+    root.querySelector('h1, #title h1, ytd-watch-metadata h1')?.innerText
+    || metaContent('meta[property="og:title"]', 'meta[name="title"]', 'meta[name="twitter:title"]')
+    || document.title
+  );
   const authorNode = root.querySelector('ytd-channel-name a, #owner a, a[href^="/@"]');
-  const description = clean(root.querySelector('#description-inline-expander, ytd-text-inline-expander, #description')?.innerText || '');
-  const metadata = clean(root.querySelector('#info, #info-strings, ytd-watch-info-text')?.innerText || '');
-  const links = Array.from(root.querySelectorAll('a[href]')).map((a) => absolute(a.getAttribute('href'))).filter(Boolean);
+  const author = clean(
+    authorNode?.innerText
+    || authorNode?.textContent
+    || metaContent('meta[name="author"]', 'meta[itemprop="author"]')
+  );
+  const description = clean(
+    root.querySelector('#description-inline-expander, ytd-text-inline-expander, #description, #description-text')?.innerText
+    || metaContent('meta[property="og:description"]', 'meta[name="description"]', 'meta[name="twitter:description"]')
+  );
+  const metadata = clean(
+    [
+      root.querySelector('#info, #info-strings, ytd-watch-info-text')?.innerText || '',
+      root.querySelector('#owner-sub-count, #subscriber-count, ytd-video-owner-renderer #subscriber-count')?.innerText || '',
+      metaContent('meta[itemprop="interactionCount"]')
+    ].filter(Boolean).join(' | ')
+  );
+  const links = Array.from(document.querySelectorAll('a[href]')).map((a) => absolute(a.getAttribute('href'))).filter(Boolean);
+  const canonicalUrl = absolute(attribute(document.querySelector('link[rel="canonical"]'), 'href') || location.href);
   return {
     platform: 'youtube',
-    url: location.href,
+    url: canonicalUrl,
     title,
-    author: clean(authorNode?.innerText || authorNode?.textContent || ''),
+    author,
     author_url: authorNode ? absolute(authorNode.getAttribute('href')) : null,
     text: description || title,
-    full_text: clean([title, metadata, description].filter(Boolean).join('\n')),
+    full_text: clean([title, author, metadata, description].filter(Boolean).join('\n')),
     metrics_text: metadata,
     links: Array.from(new Set(links)),
     media: [],
@@ -960,6 +988,8 @@ def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: s
         detail["text"] = str(detail["full_text"])[:4000]
     if platform == "x":
         _normalize_x_detail_quality(detail)
+    elif platform == "youtube":
+        _normalize_youtube_detail_quality(detail)
     else:
         detail.setdefault("quality", "clean")
         detail.setdefault("quality_notes", [])
@@ -1003,6 +1033,47 @@ def _normalize_x_detail_quality(detail: dict[str, Any]) -> None:
     else:
         detail["quality"] = "clean"
     detail["quality_notes"] = notes
+
+
+def _normalize_youtube_detail_quality(detail: dict[str, Any]) -> None:
+    """Mark title-only or weak YouTube payloads as partial instead of clean."""
+    existing_notes = detail.get("quality_notes")
+    notes: list[str] = [str(note) for note in existing_notes if str(note).strip()] if isinstance(existing_notes, list) else []
+    title = str(detail.get("title") or "")
+    text = str(detail.get("text") or "")
+    full_text = str(detail.get("full_text") or "")
+    author = str(detail.get("author") or "")
+    metrics_text = str(detail.get("metrics_text") or "")
+    if _youtube_title_is_duration_chrome(title) and metrics_text:
+        notes.append("used_metadata_title_fallback")
+        detail["title"] = metrics_text
+        if not text or text == title:
+            detail["text"] = metrics_text
+            text = metrics_text
+        if not full_text or full_text == title:
+            detail["full_text"] = metrics_text
+            full_text = metrics_text
+        title = metrics_text
+    if not text and title:
+        notes.append("used_title_fallback")
+        detail["text"] = title
+        detail["full_text"] = full_text or title
+        text = title
+        full_text = str(detail.get("full_text") or "")
+    has_metrics = bool(
+        metrics_text
+        or any(
+            _extract_metrics({
+                "platform": "youtube",
+                "text": full_text or text or title,
+                "metrics_text": metrics_text,
+            }).values()
+        )
+    )
+    if (text == title or full_text == title) and (not author or not has_metrics):
+        notes.append("missing_author_or_metrics")
+    detail["quality"] = "partial" if notes else "clean"
+    detail["quality_notes"] = list(dict.fromkeys(notes))
 
 
 def _x_detail_is_noisy(raw_detail: dict[str, Any]) -> bool:
@@ -1160,6 +1231,47 @@ def _extract_from_reattached_cdp(
     return result
 
 
+def _extract_detail_from_cdp_with_retry(
+    target: str,
+    session_id: str,
+    page_id: str | None,
+    endpoint: str,
+    target_url: str,
+    wait_ms: int,
+    new_tab_if_needed: bool = False,
+    force_new_tab: bool = False,
+    close_after_extract: bool = False,
+) -> dict[str, Any]:
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            resolved_wait_ms = max(int(wait_ms), 15000) if attempt and target == "youtube" else wait_ms
+            extracted = _extract_detail_from_cdp_endpoint(
+                target=target,
+                session_id=session_id,
+                page_id=page_id,
+                endpoint=endpoint,
+                target_url=target_url,
+                wait_ms=resolved_wait_ms,
+                new_tab_if_needed=new_tab_if_needed,
+                force_new_tab=force_new_tab,
+                close_after_extract=close_after_extract,
+            )
+            extracted["detail_retry_count"] = attempt
+            return extracted
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_cdp_error(exc):
+                raise
+            if attempt == 0:
+                time.sleep(0.25)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("unreachable")
+
+
 def social_detail(
     platform: str,
     url: str,
@@ -1216,7 +1328,7 @@ def social_detail(
         endpoint = _cdp_endpoint(started)
     try:
         if endpoint:
-            extracted = _extract_detail_from_cdp_endpoint(
+            extracted = _extract_detail_from_cdp_with_retry(
                 target=target,
                 session_id=resolved_session_id,
                 page_id=resolved_page_id,
