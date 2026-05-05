@@ -125,6 +125,8 @@ Strict non-interactive mode is enabled by default through `WINDOWS_DESKTOP_MCP_S
 
 To intentionally allow a host-interactive action, the call must include `confirmed=true` and `confirmation_source="host"` or `"user"`. Disable strict mode only inside a dedicated automation VM or throwaway desktop session.
 
+For Windows app text entry, prefer `desktop_interact(kb_unicode)` with `require_handle`. It uses the clipboard plus paste, so punctuation and Unicode are preserved. Use `kb_type` only for simple layout-insensitive text; it depends on the active Windows keyboard layout.
+
 Use policy parameters to constrain task execution:
 
 1. `allowed_tools` and `denied_tools` restrict whole super-tools.

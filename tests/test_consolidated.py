@@ -94,6 +94,42 @@ class TestDispatcher:
         assert result["_elapsed_ms"] >= 40  # ~50ms with some tolerance
 
 
+class TestDesktopInputSafety:
+    """Regression tests for host desktop text entry safeguards."""
+
+    def test_kb_type_blocks_when_required_window_is_not_focused(self):
+        """Plain typing should not execute if the active window handle changed."""
+        from desktop_mcp.tools import input as inp
+
+        with patch.object(inp, "focused_window_data", return_value={"handle": 111}):
+            with patch.object(inp.pyautogui, "write") as write:
+                with pytest.raises(RuntimeError, match="Fenetre active"):
+                    inp.type_text("should not type", require_handle=222)
+
+        write.assert_not_called()
+
+    def test_kb_unicode_preserves_punctuation_via_clipboard_with_handle_guard(self):
+        """Unicode clipboard typing is the reliable path for punctuation-sensitive text."""
+        from desktop_mcp.tools import input as inp
+
+        text = "UNICODE_OK: desktop_interact.kb_unicode preserved punctuation: _ - ->"
+        with patch.object(inp, "focused_window_data", return_value={"handle": 2622906}):
+            with patch.object(inp.win32clipboard, "OpenClipboard") as open_clip:
+                with patch.object(inp.win32clipboard, "EmptyClipboard") as empty_clip:
+                    with patch.object(inp.win32clipboard, "SetClipboardData") as set_clip:
+                        with patch.object(inp.win32clipboard, "CloseClipboard") as close_clip:
+                            with patch.object(inp.pyautogui, "hotkey") as hotkey:
+                                result = inp.type_text_unicode(text, require_handle=2622906)
+
+        assert result["ok"] is True
+        assert result["method"] == "clipboard"
+        set_clip.assert_called_once_with(inp.win32clipboard.CF_UNICODETEXT, text)
+        hotkey.assert_called_once_with("ctrl", "v")
+        open_clip.assert_called_once()
+        empty_clip.assert_called_once()
+        close_clip.assert_called_once()
+
+
 class TestRegistry:
     """Test that all expected tools are registered."""
 
@@ -1930,6 +1966,43 @@ class TestSocialMediaReadOnly:
         assert result["items"][0]["detail"]["full_text"] == "First detail"
         assert "detail" not in result["items"][2]
 
+    def test_x_detail_filters_script_noise_and_falls_back_to_title_text(self):
+        """X detail should never expose huge JS/bootstrap payloads as model-facing text."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw = {
+            "platform": "x",
+            "url": "https://x.com/0xPaulius/status/2045518997450272990",
+            "title": '(1) Paulius sur X : "Codex released a super Design UI tool" / X',
+            "text": "JavaScript n'est pas disponible. window.__INITIAL_STATE__={\"entities\":{}}; webpackChunk_twitter_responsive_web.push([])",
+            "full_text": "<style>body{}</style> window.__SCRIPTS_LOADED__.runtime=true; document.createElement('script')",
+            "metrics_text": "Loading…",
+            "links": ["https://x.com/0xPaulius"],
+        }
+
+        detail = sm._normalize_detail(raw, "x", raw["url"])
+
+        assert detail["text"] == "Codex released a super Design UI tool"
+        assert detail["full_text"] == "Codex released a super Design UI tool"
+        assert "window.__INITIAL_STATE__" not in detail["text"]
+        assert "webpackChunk" not in detail["full_text"]
+        assert detail["quality"] == "partial"
+        assert "filtered_script_noise" in detail["quality_notes"]
+
+    def test_x_detail_noise_is_not_meaningful_without_clean_fallback(self):
+        """Noisy X fallback pages should keep polling instead of being accepted as rich detail."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw = {
+            "platform": "x",
+            "title": "",
+            "text": "window.__INITIAL_STATE__={}; JavaScript n'est pas disponible.",
+            "full_text": "webpackChunk_twitter_responsive_web.push([])",
+            "links": ["https://x.com/tos"],
+        }
+
+        assert sm._detail_is_meaningful(raw, "x") is False
+
 
 class TestGoalRunner:
     """Test persistent long-running goals for model-operated workflows."""
@@ -2062,6 +2135,65 @@ class TestGoalRunner:
         assert status["goal"]["status"] == "complete"
         assert status["goal"]["final_observation"]["observation"] == "final"
         assert listed["active_goal_id"] == ""
+
+    def test_goal_live_read_only_eval_create_step_complete(self, tmp_path):
+        """Live-style goal eval: create, run one read-only step, then complete with evidence."""
+        from desktop_mcp.tools import goals
+
+        observations = [
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "initial"}},
+            {"ok": True, "scope": "desktop", "observation": {"image_hash": "final"}},
+        ]
+        action_result = {
+            "ok": True,
+            "tool": "runtime",
+            "action": "status",
+            "risk": "read",
+            "policy": {"ok": True, "allowed_tools": ["runtime"], "allowed_actions": ["runtime/status"]},
+            "before": {"ok": True, "scope": "desktop", "observation": {"image_hash": "before"}},
+            "result": {"policy": {"strict_non_interactive": True}, "active_playwright_sessions": 0},
+            "verification": {"ok": True, "checks": []},
+            "after": {"ok": True, "scope": "desktop", "observation": {"image_hash": "after"}},
+        }
+
+        with patch.object(goals, "GOAL_ROOT", tmp_path):
+            with patch.object(goals, "ACTIVE_GOAL_FILE", tmp_path / "active.json"):
+                with patch.object(goals, "workflow_observe", side_effect=observations):
+                    with patch.object(goals, "workflow_act_verify", return_value=action_result) as act:
+                        created = goals.goal_create(
+                            objective="Live smoke test persistent goal",
+                            success_criteria=[
+                                "goal create persists active state",
+                                "goal step records runtime status evidence",
+                                "goal complete stores final observation",
+                            ],
+                            constraints=["read-only actions only"],
+                            allowed_tools=["runtime"],
+                            allowed_actions=["runtime/status"],
+                            goal_id="live-smoke",
+                        )
+                        stepped = goals.goal_step(
+                            goal_id="live-smoke",
+                            tool="runtime",
+                            target_action="status",
+                            rationale="Verify runtime through persistent goal step",
+                        )
+                        completed = goals.goal_complete(
+                            goal_id="live-smoke",
+                            outcome="Live goal smoke test passed.",
+                        )
+                        status = goals.goal_status(goal_id="live-smoke", include_observation=True)
+
+        assert created["ok"] is True
+        assert stepped["ok"] is True
+        assert stepped["step"]["evidence"]["result"]["policy"]["strict_non_interactive"] is True
+        assert completed["summary"]["status"] == "complete"
+        assert status["goal"]["initial_observation"]["observation"]["image_hash"] == "initial"
+        assert status["goal"]["steps"][0]["evidence"]["before"]["observation"]["image_hash"] == "before"
+        assert status["goal"]["final_observation"]["observation"]["image_hash"] == "final"
+        act.assert_called_once()
+        assert act.call_args.kwargs["allowed_tools"] == ["runtime"]
+        assert act.call_args.kwargs["allowed_actions"] == ["runtime/status"]
 
 
 class TestVideoModule:

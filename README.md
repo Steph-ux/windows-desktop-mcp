@@ -109,6 +109,14 @@ social_media -> search(platform="tiktok", query="codex", limit=25, keep_open=Fal
 
 These actions are designed for model planning: `social_media/search` and `social_media/extract` are `read` risk, non-host-interactive, and return structured items with `extraction_method="dom"`. When ranking is enabled, items include `metrics`, `rank_score`, and `rank_position` parsed from views, likes, replies/comments, reposts/shares, and bookmarks/saves where the platform exposes them in visible DOM text.
 
+`social_media/detail` filters obvious platform bootstrap/script noise before returning model-facing text. If a platform page exposes only a broken or noisy fallback, the detail response may be partial; callers should keep the original ranked search item text as the fallback.
+
+## Desktop Input Safety
+
+Host desktop input can affect the user's real focus, mouse, keyboard, and clipboard. Prefer API/DOM/CDP actions when possible. When text entry is necessary, use `desktop_interact -> kb_unicode(text=..., require_handle=...)` for punctuation-sensitive or Unicode text. `kb_type` uses the active Windows keyboard layout and is only safe for simple text.
+
+Always observe the target window and pass `require_handle` before typing. If focus changes, the action must fail instead of typing into the wrong application.
+
 ## Persistent Goals
 
 Use `goal` when a model needs to keep a durable objective across multiple observe -> act -> verify cycles. Goals are persisted under `.pm-runtime/goals` and store objective, success criteria, constraints, risk policy, steps, evidence, status, and history.

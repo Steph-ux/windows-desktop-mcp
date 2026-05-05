@@ -302,6 +302,17 @@ _DETAIL_EXTRACTORS = {
 _DEFAULT_EXTRACT_WAIT_MS = 10000
 _DEFAULT_EXTRACT_POLL_MS = 250
 _DEFAULT_SCROLL_PAUSE_MS = 500
+_MAX_DETAIL_TEXT_CHARS = 8000
+_X_DETAIL_NOISE_MARKERS = (
+    "window.__INITIAL_STATE__",
+    "webpackChunk_twitter_responsive_web",
+    "window.__SCRIPTS_LOADED__",
+    "document.createElement",
+    "JavaScript n&#x27;est pas disponible",
+    "JavaScript n'est pas disponible",
+    "Loading chunk ",
+    "<style>",
+)
 _DEFAULT_SOCIAL_CDP_PROFILE = "agent-social-x-cdp"
 _DEFAULT_SOCIAL_CDP_INSTANCE = "agent-social-x-cdp"
 
@@ -781,6 +792,8 @@ def _detail_is_meaningful(raw_detail: dict[str, Any], platform: str) -> bool:
         }
         if metrics_text in loading_markers or text.lower() in loading_markers:
             return False
+        if _x_detail_is_noisy(raw_detail):
+            return bool(_x_text_from_title(str(raw_detail.get("title") or "")))
         return bool(raw_detail.get("author_url") or has_links or _extract_metrics({"metrics_text": metrics_text})["views"] > 0)
     if platform == "youtube":
         return bool(raw_detail.get("title") or raw_detail.get("author") or text)
@@ -801,6 +814,11 @@ def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: s
         detail["full_text"] = detail["text"]
     if not detail.get("text") and detail.get("full_text"):
         detail["text"] = str(detail["full_text"])[:4000]
+    if platform == "x":
+        _normalize_x_detail_quality(detail)
+    for key in ("text", "full_text"):
+        if detail.get(key):
+            detail[key] = str(detail[key])[:_MAX_DETAIL_TEXT_CHARS]
     links = detail.get("links")
     detail["links"] = _unique_strings(links if isinstance(links, list) else [])
     media = detail.get("media")
@@ -811,6 +829,61 @@ def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: s
         "metrics_text": detail.get("metrics_text") or "",
     })
     return detail
+
+
+def _normalize_x_detail_quality(detail: dict[str, Any]) -> None:
+    """Prevent X script/bootstrap payloads from becoming model-visible detail text."""
+    notes: list[str] = []
+    title_text = _x_text_from_title(str(detail.get("title") or ""))
+    text = str(detail.get("text") or "")
+    full_text = str(detail.get("full_text") or "")
+    if _x_text_is_noisy(text) or _x_text_is_noisy(full_text):
+        notes.append("filtered_script_noise")
+        fallback = title_text
+        detail["text"] = fallback
+        detail["full_text"] = fallback
+    elif title_text and (not text or text.lower() in {"loading", "chargement"}):
+        notes.append("used_title_fallback")
+        detail["text"] = title_text
+        detail["full_text"] = title_text
+    detail["quality"] = "partial" if notes and detail.get("text") else "noisy" if notes else "clean"
+    detail["quality_notes"] = notes
+
+
+def _x_detail_is_noisy(raw_detail: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(raw_detail.get(key) or "")
+        for key in ("title", "text", "full_text", "metrics_text")
+    )
+    return _x_text_is_noisy(text)
+
+
+def _x_text_is_noisy(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    marker_hits = sum(1 for marker in _X_DETAIL_NOISE_MARKERS if marker in value)
+    if marker_hits:
+        return True
+    if len(value) > 20000 and ("function(" in value or "=>{" in value or "var " in value):
+        return True
+    return False
+
+
+def _x_text_from_title(title: str) -> str:
+    text = str(title or "").strip()
+    if not text:
+        return ""
+    patterns = [
+        r':\s*["“](.+?)["”]\s*/\s*X\s*$',
+        r'on\s+X:\s*["“](.+?)["”]\s*/\s*X\s*$',
+        r'sur\s+X\s*:\s*["“](.+?)["”]\s*/\s*X\s*$',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1)).strip()
+    return ""
 
 
 def _unique_strings(values: list[Any]) -> list[str]:
