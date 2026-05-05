@@ -647,6 +647,8 @@ class TestRuntimeEvals:
         assert result["status"] == "prod-ready"
         social_search.assert_called_once()
         assert social_search.call_args.kwargs["browser_engine"] == "cdp"
+        assert social_search.call_args.kwargs["wait_until"] == "domcontentloaded"
+        assert "wait_ms" not in social_search.call_args.kwargs
         assert social_search.call_args.kwargs["include_details"] is True
         assert social_search.call_args.kwargs["keep_open"] is True
         names = {check["name"] for check in result["checks"]}

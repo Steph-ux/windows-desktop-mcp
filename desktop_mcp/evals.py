@@ -227,7 +227,7 @@ def _run_social_suite(
                 detail_limit=safe_detail_limit,
                 keep_open=True,
                 browser_engine="cdp",
-                wait_ms=max(int(wait_ms), 1000),
+                wait_until="domcontentloaded",
                 scroll_steps=max(int(scroll_steps), 0),
             )
         except Exception as exc:
