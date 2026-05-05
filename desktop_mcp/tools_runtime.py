@@ -4,6 +4,7 @@ import inspect
 from typing import Any
 
 from .app import mcp
+from .evals import runtime_evals
 from .runtime import clear_events, recent_events, runtime_health_check, runtime_status
 from .tool_policy import classify_action_risk, is_host_interactive_action, strict_non_interactive_enabled
 

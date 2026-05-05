@@ -355,10 +355,10 @@ R["system_ops"] = (
 
 R["runtime"] = (
     "MCP runtime status, analysis, and health.\n"
-    "Actions: status, events, clear, health, manifest, analysis_export, analysis_latest, ping", {
+    "Actions: status, events, clear, health, manifest, evals, analysis_export, analysis_latest, ping", {
     "status": _trt.runtime_get_status, "events": _trt.runtime_get_recent_events,
     "clear": _trt.runtime_clear_events, "health": _trt.runtime_healthcheck,
-    "manifest": _trt.runtime_tool_manifest,
+    "manifest": _trt.runtime_tool_manifest, "evals": _trt.runtime_evals,
     "analysis_export": _cap.export_analysis_history, "analysis_latest": _cap.get_latest_analysis,
     "ping": _rt.ping,
 })

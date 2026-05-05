@@ -571,6 +571,130 @@ class TestAgenticEvals:
         assert result["policy"]["ok"] is True
 
 
+class TestRuntimeEvals:
+    """Test restart-friendly runtime eval reports."""
+
+    def test_runtime_manifest_exposes_evals_action(self):
+        """runtime.evals should be visible to a model from the manifest."""
+        from desktop_mcp.tools_runtime import runtime_tool_manifest
+
+        manifest = runtime_tool_manifest(tool="runtime")
+
+        assert manifest["ok"] is True
+        evals = manifest["tools"]["runtime"]["actions"]["evals"]
+        assert evals["risk"] == "read"
+        assert evals["host_interactive"] is False
+        assert "suite" in evals["signature"]
+        assert "platforms" in evals["signature"]
+
+    def test_runtime_evals_quick_reports_prod_ready_with_guards(self):
+        """Quick eval should prove manifest, risk, and confirmation gates without network."""
+        from desktop_mcp import evals as ev
+
+        blocked = {
+            "ok": False,
+            "blocked": True,
+            "phase": "confirmation",
+            "risk": "high",
+        }
+
+        with patch.object(ev, "runtime_health_check", return_value={"status": "ok", "checks": {"any_browser_available": True}}):
+            with patch.object(ev, "record_event", return_value={}):
+                with patch("desktop_mcp.tools.workflows.workflow_act_verify", return_value=blocked):
+                    result = ev.runtime_evals(suite="quick")
+
+        assert result["ok"] is True
+        assert result["status"] == "prod-ready"
+        assert result["requested_suites"] == ["quick"]
+        names = {check["name"] for check in result["checks"]}
+        assert "manifest.runtime.evals" in names
+        assert "guard.desktop_interact.kb_unicode.blocked_without_confirmation" in names
+        assert "workflow.blocks_high_risk_without_confirmation" in names
+
+    def test_runtime_evals_social_checks_cdp_read_only_and_detail_quality(self):
+        """Social eval should assert CDP, no host input, ranking, and detail quality."""
+        from desktop_mcp import evals as ev
+
+        fake_search = {
+            "ok": True,
+            "platform": "x",
+            "read_only": True,
+            "host_interactive": False,
+            "cdp_direct": True,
+            "browser": {"uses_host_mouse": False, "uses_host_keyboard": False},
+            "items": [
+                {
+                    "platform": "x",
+                    "text": "Codex post",
+                    "url": "https://x.com/a/status/1",
+                    "rank_position": 1,
+                    "metrics": {"views": 123},
+                    "detail": {
+                        "text": "Codex post detail",
+                        "quality": "clean",
+                        "quality_notes": [],
+                        "cdp_direct": True,
+                    },
+                }
+            ],
+        }
+
+        with patch.object(ev, "record_event", return_value={}):
+            with patch("desktop_mcp.tools.social_media.social_search", return_value=fake_search) as social_search:
+                result = ev.runtime_evals(suite="social", platforms=["x"], query="codex", limit=2, detail_limit=1)
+
+        assert result["ok"] is True
+        assert result["status"] == "prod-ready"
+        social_search.assert_called_once()
+        assert social_search.call_args.kwargs["browser_engine"] == "cdp"
+        assert social_search.call_args.kwargs["include_details"] is True
+        assert social_search.call_args.kwargs["keep_open"] is True
+        names = {check["name"] for check in result["checks"]}
+        assert "social.x.cdp_direct" in names
+        assert "social.x.uses_host_mouse_false" in names
+        assert "social.x.detail_quality_present" in names
+
+    def test_runtime_evals_social_degrades_when_platform_extracts_no_items(self):
+        """Empty social extraction should degrade the report without hiding the evidence."""
+        from desktop_mcp import evals as ev
+
+        fake_search = {
+            "ok": True,
+            "platform": "instagram",
+            "read_only": True,
+            "host_interactive": False,
+            "cdp_direct": True,
+            "browser": {"uses_host_mouse": False, "uses_host_keyboard": False},
+            "items": [],
+        }
+
+        with patch.object(ev, "record_event", return_value={}):
+            with patch("desktop_mcp.tools.social_media.social_search", return_value=fake_search):
+                result = ev.runtime_evals(suite="social", platforms="instagram", detail_limit=0)
+
+        assert result["ok"] is True
+        assert result["status"] == "degraded"
+        failed = [check for check in result["checks"] if check["ok"] is False]
+        assert failed[0]["severity"] == "warning"
+        assert failed[0]["name"] == "social.instagram.items_non_empty"
+
+    def test_runtime_evals_windows_returns_safe_app_scenarios(self):
+        """Windows evals should prove guards and return app scenarios without host input."""
+        from desktop_mcp import evals as ev
+
+        with patch.object(ev, "record_event", return_value={}):
+            result = ev.runtime_evals(suite="windows")
+
+        assert result["ok"] is True
+        assert result["status"] == "prod-ready"
+        windows = result["suites"]["windows"]
+        scenario_ids = {item["id"] for item in windows["scenarios"]}
+        assert "notepad_unicode_focus_guard" in scenario_ids
+        assert "file_explorer_read_only_observe" in scenario_ids
+        assert "calculator_focus_block" in scenario_ids
+        assert windows["live_execution"]["enabled"] is False
+
+
 class TestOperatorLayer:
     """Test the operator task-session layer built on top of workflow."""
 

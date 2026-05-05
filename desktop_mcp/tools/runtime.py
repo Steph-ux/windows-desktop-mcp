@@ -19,7 +19,7 @@ from ..browser_core import browser_availability
 from ..paths import SCREENSHOT_DIR
 from ..runtime import tool_log
 from ..state import PLAYWRIGHT_SESSIONS, SESSION_MAX_AGE_MINUTES
-from ..tools_runtime import runtime_clear_events, runtime_get_recent_events, runtime_get_status, runtime_healthcheck
+from ..tools_runtime import runtime_clear_events, runtime_evals, runtime_get_recent_events, runtime_get_status, runtime_healthcheck
 from ..desktop_core import list_windows_data, focused_window_data
 
 _MACROS: dict[str, list[dict[str, Any]]] = {}
@@ -189,6 +189,7 @@ __all__ = [
     "ping",
     "run_command",
     "runtime_clear_events",
+    "runtime_evals",
     "runtime_get_recent_events",
     "runtime_get_status",
     "runtime_healthcheck",

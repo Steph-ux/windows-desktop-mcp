@@ -127,6 +127,16 @@ To intentionally allow a host-interactive action, the call must include `confirm
 
 For Windows app text entry, prefer `desktop_interact(kb_unicode)` with `require_handle`. It uses the clipboard plus paste, so punctuation and Unicode are preserved. Use `kb_type` only for simple layout-insensitive text; it depends on the active Windows keyboard layout.
 
+## Restart Evals
+
+Use `runtime(evals)` after restarting the MCP to produce a structured readiness report:
+
+1. `runtime(evals, suite="quick")` checks manifest coverage, runtime health, risk policy, and confirmation gates without network access.
+2. `runtime(evals, suite="social")` runs live read-only CDP extraction against X, YouTube, TikTok, and Instagram and verifies `cdp_direct`, no host mouse/keyboard usage, ranking, non-empty items, and detail `quality`.
+3. `runtime(evals, suite="windows")` validates desktop input/focus guards and returns Notepad, File Explorer, and Calculator eval scenarios. It does not run host-interactive app actions by itself.
+
+If a Windows app scenario needs to run live, execute each step as an explicit `workflow(act_verify)` call with `confirmed=true`, `confirmation_source="user"` or `"host"`, and `require_handle` captured from a prior observation.
+
 Use policy parameters to constrain task execution:
 
 1. `allowed_tools` and `denied_tools` restrict whole super-tools.

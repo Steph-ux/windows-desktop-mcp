@@ -111,6 +111,22 @@ These actions are designed for model planning: `social_media/search` and `social
 
 `social_media/detail` filters obvious platform bootstrap/script noise before returning model-facing text. X generic shell/footer fallbacks are marked with `quality="noisy"` and blank `text/full_text`. If a platform page exposes only a broken or noisy fallback, callers should keep the original ranked search item text as the fallback.
 
+## Runtime Evals
+
+Use `runtime -> evals` after a server restart to get a structured `prod-ready`, `degraded`, or `failed` report.
+
+```python
+runtime -> evals(suite="quick")
+runtime -> evals(suite="social", platforms=["x", "youtube"], query="codex")
+runtime -> evals(suite="all", limit=3, detail_limit=1)
+```
+
+Suites:
+
+- `quick`: manifest, health, risk policy, and confirmation guards; no network.
+- `social`: live read-only CDP extraction for X, YouTube, TikTok, and Instagram with checks for no host mouse/keyboard, ranking, non-empty extraction, and detail `quality`.
+- `windows`: desktop-app safety checks plus Notepad/File Explorer/Calculator scenario plans. It does not type, focus, or launch apps by itself; host-interactive app evals must be run as individual confirmed `workflow.act_verify` steps.
+
 ## Desktop Input Safety
 
 Host desktop input can affect the user's real focus, mouse, keyboard, and clipboard. Prefer API/DOM/CDP actions when possible. When text entry is necessary, use `desktop_interact -> kb_unicode(text=..., require_handle=...)` for punctuation-sensitive or Unicode text. `kb_type` uses the active Windows keyboard layout and is only safe for simple text.
