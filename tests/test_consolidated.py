@@ -2003,6 +2003,35 @@ class TestSocialMediaReadOnly:
 
         assert sm._detail_is_meaningful(raw, "x") is False
 
+    def test_x_detail_filters_generic_page_chrome_from_live_fallback(self):
+        """X generic shell/footer text should not be exposed as post detail."""
+        from desktop_mcp.tools import social_media as sm
+
+        raw = {
+            "platform": "x",
+            "title": "X",
+            "text": (
+                "Post Voir de nouveaux posts Conditions d’utilisation | Politique de Confidentialité | "
+                "Politique relative aux cookies | Accessibilité | Informations sur les publicités | "
+                "Plus © 2026 X Corp."
+            ),
+            "full_text": (
+                "Post Voir de nouveaux posts Conditions d’utilisation | Politique de Confidentialité | "
+                "Politique relative aux cookies | Accessibilité | Informations sur les publicités | "
+                "Plus © 2026 X Corp."
+            ),
+            "metrics_text": "Fil d'actualités | Retour | Chargement | Tendances | Pied de page | Plus",
+            "links": ["https://x.com/tos", "https://x.com/privacy"],
+        }
+
+        detail = sm._normalize_detail(raw, "x", "https://x.com/example/status/1")
+
+        assert sm._detail_is_meaningful(raw, "x") is False
+        assert detail["text"] == ""
+        assert detail["full_text"] == ""
+        assert detail["quality"] == "noisy"
+        assert "filtered_generic_page_chrome" in detail["quality_notes"]
+
 
 class TestGoalRunner:
     """Test persistent long-running goals for model-operated workflows."""

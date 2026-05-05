@@ -109,7 +109,7 @@ social_media -> search(platform="tiktok", query="codex", limit=25, keep_open=Fal
 
 These actions are designed for model planning: `social_media/search` and `social_media/extract` are `read` risk, non-host-interactive, and return structured items with `extraction_method="dom"`. When ranking is enabled, items include `metrics`, `rank_score`, and `rank_position` parsed from views, likes, replies/comments, reposts/shares, and bookmarks/saves where the platform exposes them in visible DOM text.
 
-`social_media/detail` filters obvious platform bootstrap/script noise before returning model-facing text. If a platform page exposes only a broken or noisy fallback, the detail response may be partial; callers should keep the original ranked search item text as the fallback.
+`social_media/detail` filters obvious platform bootstrap/script noise before returning model-facing text. X generic shell/footer fallbacks are marked with `quality="noisy"` and blank `text/full_text`. If a platform page exposes only a broken or noisy fallback, callers should keep the original ranked search item text as the fallback.
 
 ## Desktop Input Safety
 

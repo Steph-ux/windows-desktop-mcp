@@ -313,6 +313,15 @@ _X_DETAIL_NOISE_MARKERS = (
     "Loading chunk ",
     "<style>",
 )
+_X_DETAIL_GENERIC_CHROME_MARKERS = (
+    "Conditions d’utilisation",
+    "Politique de Confidentialité",
+    "Politique relative aux cookies",
+    "Informations sur les publicités",
+    "Pied de page",
+    "Fil d'actualités",
+    "Voir de nouveaux posts",
+)
 _DEFAULT_SOCIAL_CDP_PROFILE = "agent-social-x-cdp"
 _DEFAULT_SOCIAL_CDP_INSTANCE = "agent-social-x-cdp"
 
@@ -832,7 +841,7 @@ def _normalize_detail(raw_detail: dict[str, Any], platform: str, fallback_url: s
 
 
 def _normalize_x_detail_quality(detail: dict[str, Any]) -> None:
-    """Prevent X script/bootstrap payloads from becoming model-visible detail text."""
+    """Prevent X bootstrap or generic shell text from becoming model-visible detail."""
     notes: list[str] = []
     title_text = _x_text_from_title(str(detail.get("title") or ""))
     text = str(detail.get("text") or "")
@@ -842,11 +851,19 @@ def _normalize_x_detail_quality(detail: dict[str, Any]) -> None:
         fallback = title_text
         detail["text"] = fallback
         detail["full_text"] = fallback
+    elif _x_text_is_generic_chrome(text) or _x_text_is_generic_chrome(full_text):
+        notes.append("filtered_generic_page_chrome")
+        fallback = title_text
+        detail["text"] = fallback
+        detail["full_text"] = fallback
     elif title_text and (not text or text.lower() in {"loading", "chargement"}):
         notes.append("used_title_fallback")
         detail["text"] = title_text
         detail["full_text"] = title_text
-    detail["quality"] = "partial" if notes and detail.get("text") else "noisy" if notes else "clean"
+    if notes:
+        detail["quality"] = "partial" if detail.get("text") else "noisy"
+    else:
+        detail["quality"] = "clean"
     detail["quality_notes"] = notes
 
 
@@ -855,7 +872,7 @@ def _x_detail_is_noisy(raw_detail: dict[str, Any]) -> bool:
         str(raw_detail.get(key) or "")
         for key in ("title", "text", "full_text", "metrics_text")
     )
-    return _x_text_is_noisy(text)
+    return _x_text_is_noisy(text) or _x_text_is_generic_chrome(text)
 
 
 def _x_text_is_noisy(text: str) -> bool:
@@ -866,6 +883,21 @@ def _x_text_is_noisy(text: str) -> bool:
     if marker_hits:
         return True
     if len(value) > 20000 and ("function(" in value or "=>{" in value or "var " in value):
+        return True
+    return False
+
+
+def _x_text_is_generic_chrome(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    lower_value = value.lower()
+    marker_hits = sum(1 for marker in _X_DETAIL_GENERIC_CHROME_MARKERS if marker.lower() in lower_value)
+    if marker_hits >= 2:
+        return True
+    if "post voir de nouveaux posts" in lower_value and "conditions d" in lower_value:
+        return True
+    if "fil d'actualités" in lower_value and "pied de page" in lower_value:
         return True
     return False
 
