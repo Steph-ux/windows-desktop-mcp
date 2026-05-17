@@ -186,6 +186,22 @@ def playwright_launch(browser: str = "auto"):
     return sync_playwright()
 
 
+def _build_stealth_args(
+    fingerprint_seed: int | None = None,
+    fingerprint_platform: str | None = None,
+    webrtc_ip: str | None = None,
+) -> list[str]:
+    """Build extra Chromium args for CloakBrowser stealth features."""
+    args: list[str] = []
+    if fingerprint_seed is not None:
+        args.append(f"--fingerprint={fingerprint_seed}")
+    if fingerprint_platform:
+        args.append(f"--fingerprint-platform={fingerprint_platform}")
+    if webrtc_ip:
+        args.append(f"--fingerprint-webrtc-ip={webrtc_ip}")
+    return args
+
+
 def open_playwright_runtime(
     browser: str = "auto",
     headless: bool = True,
@@ -196,17 +212,19 @@ def open_playwright_runtime(
     fingerprint_seed: int | None = None,
     timezone: str | None = None,
     locale: str | None = None,
+    fingerprint_platform: str | None = None,
+    webrtc_ip: str | None = None,
+    human_preset: str = "default",
 ):
     browser_key = (browser or "auto").lower()
     if stealth and browser_key in {"auto", "chrome"}:
         try:
             from cloakbrowser import launch as cloak_launch
-            extra_args = []
-            if fingerprint_seed is not None:
-                extra_args.append(f"--fingerprint={fingerprint_seed}")
+            extra_args = _build_stealth_args(fingerprint_seed, fingerprint_platform, webrtc_ip)
             engine = cloak_launch(
                 headless=headless,
                 humanize=humanize,
+                human_preset=human_preset,
                 proxy=proxy,
                 geoip=geoip,
                 timezone=timezone,
@@ -228,6 +246,47 @@ def open_playwright_runtime(
         engine = runtime.firefox.launch(headless=headless)
         actual_browser = "firefox"
     return playwright, runtime, engine, actual_browser
+
+
+def open_stealth_context(
+    headless: bool = True,
+    humanize: bool = False,
+    human_preset: str = "default",
+    proxy: str | None = None,
+    geoip: bool = False,
+    fingerprint_seed: int | None = None,
+    fingerprint_platform: str | None = None,
+    webrtc_ip: str | None = None,
+    timezone: str | None = None,
+    locale: str | None = None,
+    user_agent: str | None = None,
+    viewport: dict | None = None,
+    color_scheme: str | None = None,
+    **kwargs,
+):
+    """Launch a CloakBrowser context directly (browser+context in one call).
+
+    Uses cloakbrowser.launch_context() which supports user_agent, viewport,
+    and other context options not available through launch() alone.
+    Returns (context, "chrome-stealth") or raises ImportError.
+    """
+    from cloakbrowser import launch_context as cloak_context
+    extra_args = _build_stealth_args(fingerprint_seed, fingerprint_platform, webrtc_ip)
+    context = cloak_context(
+        headless=headless,
+        humanize=humanize,
+        human_preset=human_preset,
+        proxy=proxy,
+        geoip=geoip,
+        timezone=timezone,
+        locale=locale,
+        user_agent=user_agent,
+        viewport=viewport,
+        color_scheme=color_scheme,
+        args=extra_args or None,
+        **kwargs,
+    )
+    return context, "chrome-stealth"
 
 
 def open_playwright_cdp_runtime(endpoint: str, browser: str = "chrome", timeout_ms: int = 30000):

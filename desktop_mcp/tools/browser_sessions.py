@@ -345,6 +345,9 @@ def _launch_persistent_context(
     fingerprint_seed: int | None = None,
     timezone: str | None = None,
     locale: str | None = None,
+    fingerprint_platform: str | None = None,
+    webrtc_ip: str | None = None,
+    human_preset: str = "default",
 ) -> tuple[Any, Any, Any, Any, str, Path]:
     browser_key = (browser or "auto").lower()
     profile_path = _named_profile_path(profile_name)
@@ -354,13 +357,13 @@ def _launch_persistent_context(
     if stealth and browser_key in {"auto", "chrome"}:
         try:
             from cloakbrowser import launch_persistent_context as cloak_persistent
-            extra_args = []
-            if fingerprint_seed is not None:
-                extra_args.append(f"--fingerprint={fingerprint_seed}")
+            from ..browser_core import _build_stealth_args
+            extra_args = _build_stealth_args(fingerprint_seed, fingerprint_platform, webrtc_ip)
             context = cloak_persistent(
                 str(profile_path),
                 headless=headless,
                 humanize=humanize,
+                human_preset=human_preset,
                 proxy=proxy,
                 geoip=geoip,
                 timezone=timezone,
@@ -427,6 +430,11 @@ def _browser_open_session_impl(
     fingerprint_seed: int | None = None,
     timezone: str | None = None,
     locale: str | None = None,
+    fingerprint_platform: str | None = None,
+    webrtc_ip: str | None = None,
+    human_preset: str = "default",
+    user_agent: str | None = None,
+    color_scheme: str | None = None,
 ) -> dict[str, Any]:
     merged = _merge_browser_preset(
         preset_name,
@@ -463,12 +471,17 @@ def _browser_open_session_impl(
             fingerprint_seed=fingerprint_seed,
             timezone=timezone,
             locale=locale,
+            fingerprint_platform=fingerprint_platform,
+            webrtc_ip=webrtc_ip,
+            human_preset=human_preset,
         )
     else:
         playwright_cm, runtime, engine, actual_browser = open_playwright_runtime(
             browser, headless=headless, stealth=stealth, humanize=humanize,
             proxy=proxy, geoip=geoip, fingerprint_seed=fingerprint_seed,
             timezone=timezone, locale=locale,
+            fingerprint_platform=fingerprint_platform, webrtc_ip=webrtc_ip,
+            human_preset=human_preset,
         )
         context = None
     try:
@@ -488,6 +501,10 @@ def _browser_open_session_impl(
             }
             if storage_state_path:
                 context_options["storage_state"] = str(Path(storage_state_path))
+            if user_agent:
+                context_options["user_agent"] = user_agent
+            if color_scheme:
+                context_options["color_scheme"] = color_scheme
             context = engine.new_context(**context_options)
             page = context.new_page()
         else:
@@ -599,6 +616,11 @@ def browser_open_session(
     fingerprint_seed: int | None = None,
     timezone: str | None = None,
     locale: str | None = None,
+    fingerprint_platform: str | None = None,
+    webrtc_ip: str | None = None,
+    human_preset: str = "default",
+    user_agent: str | None = None,
+    color_scheme: str | None = None,
 ) -> dict[str, Any]:
     return _browser_open_session_impl(
         url=url,
@@ -620,6 +642,11 @@ def browser_open_session(
         fingerprint_seed=fingerprint_seed,
         timezone=timezone,
         locale=locale,
+        fingerprint_platform=fingerprint_platform,
+        webrtc_ip=webrtc_ip,
+        human_preset=human_preset,
+        user_agent=user_agent,
+        color_scheme=color_scheme,
     )
 
 
@@ -3088,6 +3115,247 @@ def _legacy_awaitable(value: Any) -> Any:
     if isinstance(value, list) and not isinstance(value, _AwaitableList):
         return _AwaitableList(value)
     return value
+
+
+def browser_intent_click(
+    session_id: str,
+    intent: str,
+    page_id: str | None = None,
+    button: str = "left",
+    timeout_ms: int = 5000,
+) -> dict[str, Any]:
+    """Click an element by natural language intent description.
+
+    Searches through multiple strategies: accessibility tree text match,
+    visible text match, role+name match, then OCR fallback on screenshot.
+    Example intents: "login button", "search input", "accept cookies".
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    query = " ".join((intent or "").strip().split())
+    if not query:
+        raise ValueError("Provide non-empty intent.")
+
+    # Strategy 1: getByRole with name match
+    for role in ("button", "link", "textbox", "checkbox", "menuitem", "tab", "option"):
+        try:
+            locator = page.get_by_role(role, name=re.compile(re.escape(query), re.IGNORECASE))
+            if locator.count() > 0:
+                locator.first.click(button=button, timeout=timeout_ms)
+                box = locator.first.bounding_box()
+                result = {
+                    "ok": True, "session_id": session_id, "page_id": resolved_page_id,
+                    "intent": query, "source": f"role_{role}", "x": int(box["x"] + box["width"] / 2) if box else None,
+                    "y": int(box["y"] + box["height"] / 2) if box else None,
+                }
+                record_event("browser_intent_click", intent=query, source=f"role_{role}")
+                return result
+        except Exception:
+            continue
+
+    # Strategy 2: getByText exact then partial
+    for exact in (True, False):
+        try:
+            locator = page.get_by_text(query, exact=exact)
+            if locator.count() > 0:
+                locator.first.click(button=button, timeout=timeout_ms)
+                box = locator.first.bounding_box()
+                source = "text_exact" if exact else "text_partial"
+                result = {
+                    "ok": True, "session_id": session_id, "page_id": resolved_page_id,
+                    "intent": query, "source": source, "x": int(box["x"] + box["width"] / 2) if box else None,
+                    "y": int(box["y"] + box["height"] / 2) if box else None,
+                }
+                record_event("browser_intent_click", intent=query, source=source)
+                return result
+        except Exception:
+            continue
+
+    # Strategy 3: getByLabel (for form inputs)
+    try:
+        locator = page.get_by_label(query)
+        if locator.count() > 0:
+            locator.first.click(button=button, timeout=timeout_ms)
+            box = locator.first.bounding_box()
+            result = {
+                "ok": True, "session_id": session_id, "page_id": resolved_page_id,
+                "intent": query, "source": "label", "x": int(box["x"] + box["width"] / 2) if box else None,
+                "y": int(box["y"] + box["height"] / 2) if box else None,
+            }
+            record_event("browser_intent_click", intent=query, source="label")
+            return result
+    except Exception:
+        pass
+
+    # Strategy 4: getByPlaceholder
+    try:
+        locator = page.get_by_placeholder(re.compile(re.escape(query), re.IGNORECASE))
+        if locator.count() > 0:
+            locator.first.click(button=button, timeout=timeout_ms)
+            box = locator.first.bounding_box()
+            result = {
+                "ok": True, "session_id": session_id, "page_id": resolved_page_id,
+                "intent": query, "source": "placeholder", "x": int(box["x"] + box["width"] / 2) if box else None,
+                "y": int(box["y"] + box["height"] / 2) if box else None,
+            }
+            record_event("browser_intent_click", intent=query, source="placeholder")
+            return result
+    except Exception:
+        pass
+
+    # Strategy 5: CSS selector fallback
+    for sel in (f"[aria-label*='{query}' i]", f"[title*='{query}' i]", f"[alt*='{query}' i]"):
+        try:
+            locator = page.locator(sel)
+            if locator.count() > 0:
+                locator.first.click(button=button, timeout=timeout_ms)
+                box = locator.first.bounding_box()
+                result = {
+                    "ok": True, "session_id": session_id, "page_id": resolved_page_id,
+                    "intent": query, "source": "aria_attr", "x": int(box["x"] + box["width"] / 2) if box else None,
+                    "y": int(box["y"] + box["height"] / 2) if box else None,
+                }
+                record_event("browser_intent_click", intent=query, source="aria_attr")
+                return result
+        except Exception:
+            continue
+
+    raise ValueError(f"No element found for intent={intent!r}. Try browser_suggest_actions() or browser_content(action='interactive') first.")
+
+
+def browser_suggest_actions(
+    session_id: str,
+    page_id: str | None = None,
+    max_items: int = 30,
+) -> dict[str, Any]:
+    """Analyze the page and suggest possible actions.
+
+    Returns interactive elements (buttons, links, inputs) with
+    their text, role, position, and a ready-to-use action string.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    suggestions: list[dict[str, Any]] = []
+    safe_max = max(1, min(int(max_items), 100))
+
+    # Scan for interactive elements
+    interactive_roles = {
+        "button": "click", "link": "click", "textbox": "fill",
+        "checkbox": "toggle", "radio": "toggle", "combobox": "select",
+        "menuitem": "click", "tab": "click", "switch": "toggle",
+    }
+    for role, action_type in interactive_roles.items():
+        try:
+            locator = page.get_by_role(role)
+            count = min(locator.count(), safe_max - len(suggestions))
+            for i in range(count):
+                if len(suggestions) >= safe_max:
+                    break
+                try:
+                    el = locator.nth(i)
+                    text = (el.text_content() or "").strip()[:80]
+                    box = el.bounding_box()
+                    if not box or box["width"] < 1 or box["height"] < 1:
+                        continue
+                    visible = el.is_visible()
+                    if not visible:
+                        continue
+                    suggestions.append({
+                        "role": role,
+                        "text": text,
+                        "action_type": action_type,
+                        "x": int(box["x"] + box["width"] / 2),
+                        "y": int(box["y"] + box["height"] / 2),
+                        "width": int(box["width"]),
+                        "height": int(box["height"]),
+                        "suggested_action": f'browser_intent_click(intent="{text}")' if action_type == "click" else f'browser_type_selector(selector="[role={role}]", text="...")',
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    result = {
+        "ok": True,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "suggestions": suggestions,
+        "count": len(suggestions),
+        "url": page.url,
+        "title": page.title(),
+    }
+    record_event("browser_suggest_actions", session_id=session_id, count=len(suggestions))
+    return result
+
+
+def browser_observe(
+    session_id: str,
+    page_id: str | None = None,
+    include_interactive: bool = True,
+    include_text: bool = True,
+    max_interactive: int = 30,
+) -> dict[str, Any]:
+    """Rich browser observation: page state + interactive elements + visible text.
+
+    Combines page summary, interactive element scan, and text extraction
+    into a single observation for model-side planning.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    observation: dict[str, Any] = {
+        "ok": True,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "url": page.url,
+        "title": page.title(),
+        "viewport": page.viewport_size,
+        "scroll_y": page.evaluate("() => window.scrollY"),
+        "scroll_height": page.evaluate("() => document.body.scrollHeight"),
+        "ready_state": page.evaluate("() => document.readyState"),
+    }
+    if include_interactive:
+        try:
+            suggestions = browser_suggest_actions(session_id=session_id, page_id=page_id, max_items=max_interactive)
+            observation["interactive"] = suggestions.get("suggestions", [])
+            observation["interactive_count"] = suggestions.get("count", 0)
+        except Exception as e:
+            observation["interactive"] = []
+            observation["interactive_error"] = str(e)
+    if include_text:
+        try:
+            text = (page.inner_text("body") or "")[:3000]
+            observation["visible_text"] = text
+        except Exception:
+            observation["visible_text"] = ""
+    record_event("browser_observe", session_id=session_id, page_id=resolved_page_id)
+    return observation
+
+
+def browser_human_idle(session_id: str, page_id: str | None = None, duration_ms: int = 2000) -> dict[str, Any]:
+    """Simulate human idle behavior between browser actions.
+
+    Adds small random mouse micro-movements and wait time to appear
+    more human-like between page interactions.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    import random
+    safe_duration = max(200, min(int(duration_ms), 10000))
+    viewport = page.viewport_size or {"width": 1280, "height": 900}
+    steps = random.randint(1, 3)
+    for _ in range(steps):
+        x = random.randint(int(viewport["width"] * 0.2), int(viewport["width"] * 0.8))
+        y = random.randint(int(viewport["height"] * 0.2), int(viewport["height"] * 0.8))
+        try:
+            page.mouse.move(x, y, steps=random.randint(5, 15))
+        except Exception:
+            pass
+        page.wait_for_timeout(random.randint(100, safe_duration // steps))
+    result = {
+        "ok": True,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "idle_ms": safe_duration,
+        "mouse_steps": steps,
+    }
+    record_event("browser_human_idle", session_id=session_id, idle_ms=safe_duration)
+    return result
 
 
 def _enable_legacy_awaitable_browser_tools() -> None:

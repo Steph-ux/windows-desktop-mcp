@@ -167,6 +167,19 @@ wheels = [
 ]
 
 [[package]]
+name = "cloakbrowser"
+version = "0.3.28"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "playwright" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/32/f5/58ae30a4f8f64045a74d8c63df833878f637fa29b101c8f99c3973b8c17f/cloakbrowser-0.3.28.tar.gz", hash = "sha256:e8cc34fd4f434141d57a651b95b72787438c4bcd73396c3cfb499b5a95161c02", size = 5343502, upload-time = "2026-05-11T19:46:19.189Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/56/c2b788a6eeacc2fe21ce1a37b7b5c871322a15f965b205b22dbef618992a/cloakbrowser-0.3.28-py3-none-any.whl", hash = "sha256:a88b7c8b327959c7a84bf36e2f2d7f758ec1ba6da6f66cc6e261566f44a98c7e", size = 66947, upload-time = "2026-05-11T19:46:17.313Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1570,6 +1583,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
+    { name = "cloakbrowser" },
     { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
     { name = "mss" },
@@ -1597,6 +1611,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0.0" },
+    { name = "cloakbrowser", specifier = ">=0.3.28" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.0" },
     { name = "mss", specifier = ">=10.1.0" },

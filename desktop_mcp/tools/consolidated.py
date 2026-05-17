@@ -142,9 +142,9 @@ R["browser_content"] = (
 
 R["browser_interact"] = (
     "Click, type, and fill in browser.\n"
-    "Actions: click, click_text, click_interactive, hover, focus, "
+    "Actions: click, click_text, click_interactive, click_intent, hover, focus, "
     "click_download, click_text_download, "
-    "type, press, fill_field, fill_form, toggle, upload", {
+    "type, press, fill_field, fill_form, toggle, upload, suggest_actions, human_idle", {
     "click": _bs.browser_click_selector, "click_text": _bs.browser_click_text,
     "click_interactive": _bs.browser_click_interactive,
     "hover": _bs.browser_hover_selector, "focus": _bs.browser_focus_selector,
@@ -153,11 +153,13 @@ R["browser_interact"] = (
     "type": _bs.browser_type_selector, "press": _bs.browser_press_key,
     "fill_field": _bs.browser_fill_form_field, "fill_form": _bs.browser_fill_form,
     "toggle": _bs.browser_toggle_form_field, "upload": _bs.browser_set_input_files,
+    "click_intent": _bs.browser_intent_click, "suggest_actions": _bs.browser_suggest_actions,
+    "human_idle": _bs.browser_human_idle,
 })
 
 R["browser_observe"] = (
     "Capture screenshots and wait for conditions.\n"
-    "Actions: capture, capture_element, capture_session, capture_live, save, save_live, "
+    "Actions: capture, capture_element, capture_session, capture_live, save, save_live, observe_rich, "
     "wait_selector, wait_text, wait_load, wait_dom, wait_url, wait_visual, wait_download", {
     "capture": _bh.browser_capture_page, "capture_element": _bs.browser_capture_element,
     "capture_session": _bs.browser_capture_session, "capture_live": _bs.browser_capture_live_page,
@@ -166,6 +168,7 @@ R["browser_observe"] = (
     "wait_load": _bs.browser_wait_for_load_state, "wait_dom": _bs.browser_wait_for_dom_change,
     "wait_url": _bs.browser_wait_for_url, "wait_visual": _bs.browser_wait_for_visual_change,
     "wait_download": _bs.browser_wait_for_download,
+    "observe_rich": _bs.browser_observe,
 })
 
 R["browser_network"] = (
