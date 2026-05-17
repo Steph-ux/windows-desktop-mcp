@@ -186,10 +186,17 @@ def playwright_launch(browser: str = "auto"):
     return sync_playwright()
 
 
-def open_playwright_runtime(browser: str = "auto", headless: bool = True):
+def open_playwright_runtime(browser: str = "auto", headless: bool = True, stealth: bool = False, humanize: bool = False):
+    browser_key = (browser or "auto").lower()
+    if stealth and browser_key in {"auto", "chrome"}:
+        try:
+            from cloakbrowser import launch as cloak_launch
+            engine = cloak_launch(headless=headless, humanize=humanize)
+            return None, None, engine, "chrome-stealth"
+        except ImportError:
+            pass
     playwright = playwright_launch(browser)
     runtime = playwright.__enter__()
-    browser_key = (browser or "auto").lower()
     if browser_key in {"auto", "chrome"}:
         engine = runtime.chromium.launch(channel="chrome", headless=headless)
         actual_browser = "chrome"

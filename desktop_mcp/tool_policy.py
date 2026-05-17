@@ -46,6 +46,11 @@ _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("desktop_interact", "kb_hotkey"): "medium",
     ("desktop_interact", "clip_set"): "medium",
     ("desktop_interact", "macro_replay"): "high",
+    ("desktop_interact", "human_move"): "medium",
+    ("desktop_interact", "human_click"): "medium",
+    ("desktop_interact", "human_type"): "medium",
+    ("desktop_interact", "human_scroll"): "medium",
+    ("desktop_interact", "human_press"): "medium",
     ("browser_session", "user_open"): "medium",
     ("browser_session", "profile_delete"): "destructive",
     ("browser_session", "delete"): "medium",
@@ -127,6 +132,11 @@ _HOST_INTERACTIVE_BY_TOOL_ACTION: set[tuple[str, str]] = {
     ("desktop_interact", "kb_hotkey"),
     ("desktop_interact", "clip_set"),
     ("desktop_interact", "macro_replay"),
+    ("desktop_interact", "human_move"),
+    ("desktop_interact", "human_click"),
+    ("desktop_interact", "human_type"),
+    ("desktop_interact", "human_scroll"),
+    ("desktop_interact", "human_press"),
 }
 
 _READ_TOOLS = {

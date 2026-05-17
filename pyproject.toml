@@ -44,6 +44,7 @@ dependencies = [
     "selenium>=4.20.0",
     "anyio>=4.0.0",
     "websocket-client>=1.8.0",
+    "cloakbrowser>=0.3.28",
 ]
 
 [project.optional-dependencies]

@@ -383,6 +383,8 @@ def _browser_open_session_impl(
     init_script_paths: list[str] | None = None,
     grant_permissions: list[str] | None = None,
     preset_name: str | None = None,
+    stealth: bool = False,
+    humanize: bool = False,
 ) -> dict[str, Any]:
     merged = _merge_browser_preset(
         preset_name,
@@ -414,7 +416,7 @@ def _browser_open_session_impl(
             headless=headless,
         )
     else:
-        playwright_cm, runtime, engine, actual_browser = open_playwright_runtime(browser, headless=headless)
+        playwright_cm, runtime, engine, actual_browser = open_playwright_runtime(browser, headless=headless, stealth=stealth, humanize=humanize)
         context = None
     try:
         if isinstance(width, str) and width.lower() == "auto":
@@ -524,133 +526,6 @@ def _browser_open_session_impl(
         raise
 
 
-def _browser_attach_cdp_impl(
-    endpoint: str,
-    browser: str = "chrome",
-    instance_name: str | None = None,
-    profile_name: str | None = None,
-    browser_pid: int | None = None,
-    launched_debug_browser: bool = False,
-    headless: bool = False,
-    width: int | str = "auto",
-    height: int | str = "auto",
-    page_index: int = 0,
-    timeout_ms: int = 30000,
-    init_script_paths: list[str] | None = None,
-    grant_permissions: list[str] | None = None,
-) -> dict[str, Any]:
-    cleanup_stale_playwright_sessions()
-    session_id: str | None = None
-    playwright_cm, runtime, engine, actual_browser = open_playwright_cdp_runtime(endpoint, browser=browser, timeout_ms=timeout_ms)
-    try:
-        if isinstance(width, str) and width.lower() == "auto":
-            width = pyautogui.size().width
-        if isinstance(height, str) and height.lower() == "auto":
-            height = pyautogui.size().height
-        resolved_width = max(int(width), 320)
-        resolved_height = max(int(height), 240)
-        resolved_init_scripts = [str(Path(path)) for path in (init_script_paths or []) if str(path).strip()]
-        resolved_permissions = [str(item) for item in (grant_permissions or []) if str(item).strip()]
-        contexts = list(getattr(engine, "contexts", []))
-        context = contexts[0] if contexts else engine.new_context(accept_downloads=True)
-        for script_path in resolved_init_scripts:
-            context.add_init_script(path=script_path)
-        if resolved_permissions:
-            context.grant_permissions(resolved_permissions)
-        pages = list(getattr(context, "pages", []))
-        if pages:
-            index = min(max(int(page_index), 0), len(pages) - 1)
-            page = pages[index]
-        else:
-            page = context.new_page()
-        try:
-            page.set_viewport_size({"width": resolved_width, "height": resolved_height})
-        except Exception:
-            pass
-        session_id = uuid.uuid4().hex[:12]
-        session = {
-            "session_id": session_id,
-            "playwright_cm": playwright_cm,
-            "runtime": runtime,
-            "browser": engine,
-            "context": context,
-            "browser_name": actual_browser,
-            "headless": headless,
-            "pages": {},
-            "intercept_rules": [],
-            "route_handlers": [],
-            "active_page_id": None,
-            "profile_name": _safe_profile_name(profile_name) if profile_name else None,
-            "profile_path": str(_named_profile_path(profile_name)) if profile_name else None,
-            "persistent_profile": bool(profile_name),
-            "instance_name": _safe_instance_name(instance_name) if instance_name else None,
-            "created_at": time.time(),
-            "last_used_at": time.time(),
-            "cdp_endpoint": endpoint,
-            "attached": True,
-            "browser_pid": int(browser_pid) if browser_pid is not None else None,
-            "launched_debug_browser": bool(launched_debug_browser),
-            "init_script_paths": resolved_init_scripts,
-            "granted_permissions": resolved_permissions,
-        }
-        store_playwright_session(session)
-        page_id = register_playwright_page(session, page, make_active=True)
-        title = page_title(page)
-        if session["instance_name"]:
-            _write_instance_manifest(
-                session["instance_name"],
-                {
-                    "manifest_path": str(_instance_manifest_path(session["instance_name"])),
-                    "status": "running",
-                    "browser": actual_browser,
-                    "headless": headless,
-                    "profile_name": session["profile_name"],
-                    "profile_path": session["profile_path"],
-                    "persistent_profile": session["persistent_profile"],
-                    "session_id": session_id,
-                    "page_id": page_id,
-                    "url": page.url,
-                    "title": title,
-                    "cdp_endpoint": endpoint,
-                    "attached": True,
-                    "browser_pid": session.get("browser_pid"),
-                    "launched_debug_browser": session.get("launched_debug_browser"),
-                    "init_script_paths": session.get("init_script_paths"),
-                    "granted_permissions": session.get("granted_permissions"),
-                },
-            )
-        result = {
-            "session_id": session_id,
-            "page_id": page_id,
-            "url": page.url,
-            "title": title,
-            "browser": actual_browser,
-            "headless": headless,
-            "width": resolved_width,
-            "height": resolved_height,
-            "profile_name": session["profile_name"],
-            "profile_path": session["profile_path"],
-            "persistent_profile": session["persistent_profile"],
-            "instance_name": session["instance_name"],
-            "cdp_endpoint": endpoint,
-            "attached": True,
-            "browser_pid": session.get("browser_pid"),
-            "launched_debug_browser": session.get("launched_debug_browser"),
-            "init_script_paths": session.get("init_script_paths"),
-            "granted_permissions": session.get("granted_permissions"),
-        }
-        record_event("browser_attach_cdp", session_id=session_id, page_id=page_id, endpoint=endpoint, browser=actual_browser)
-        return result
-    except Exception as exc:
-        record_event("browser_attach_cdp_error", endpoint=endpoint, browser=browser, error=str(exc))
-        if session_id:
-            close_playwright_session(session_id)
-        else:
-            try:
-                engine.close()
-            finally:
-                playwright_cm.__exit__(None, None, None)
-        raise
 def browser_open_session(
     url: str,
     width: int | str = 1440,
@@ -664,6 +539,8 @@ def browser_open_session(
     init_script_paths: list[str] | None = None,
     grant_permissions: list[str] | None = None,
     preset_name: str | None = None,
+    stealth: bool = False,
+    humanize: bool = False,
 ) -> dict[str, Any]:
     return _browser_open_session_impl(
         url=url,
@@ -678,6 +555,8 @@ def browser_open_session(
         init_script_paths=init_script_paths,
         grant_permissions=grant_permissions,
         preset_name=preset_name,
+        stealth=stealth,
+        humanize=humanize,
     )
 
 

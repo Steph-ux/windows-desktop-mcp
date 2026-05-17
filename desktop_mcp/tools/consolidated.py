@@ -229,7 +229,8 @@ R["desktop_interact"] = (
     "mouse_move, mouse_drag, mouse_position, mouse_scroll, "
     "kb_type, kb_unicode, kb_press, kb_hotkey, "
     "clip_get, clip_set, "
-    "macro_record, macro_replay, macro_list, macro_clear", {
+    "macro_record, macro_replay, macro_list, macro_clear, "
+    "human_move, human_click, human_type, human_scroll, human_press", {
     "click": _inp.click, "double_click": _inp.double_click, "right_click": _inp.right_click,
     "click_text": _win.click_text, "click_ocr": _ocr.click_ocr_text,
     "click_ui": _win.click_ui_element, "click_intent": _ai.intent_click,
@@ -241,6 +242,9 @@ R["desktop_interact"] = (
     "clip_get": _rt.clipboard_get, "clip_set": _rt.clipboard_set,
     "macro_record": _rt.macro_record_action, "macro_replay": _rt.macro_replay,
     "macro_list": _rt.macro_list, "macro_clear": _rt.macro_clear,
+    "human_move": _inp.human_move_mouse, "human_click": _inp.human_click_at,
+    "human_type": _inp.human_type_text, "human_scroll": _inp.human_scroll_action,
+    "human_press": _inp.human_press_key,
 })
 
 R["desktop_window"] = (

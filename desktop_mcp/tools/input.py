@@ -99,6 +99,64 @@ def hotkey(keys: list[str], interval: float = 0.05) -> dict[str, Any]:
     return result
 
 
+def human_move_mouse(x: int, y: int, preset: str = "default") -> dict[str, Any]:
+    """Move mouse to (x, y) with human-like Bézier curve."""
+    from ..human import human_move, resolve_config
+    validate_screen_point(x, y)
+    cfg = resolve_config(preset)
+    final = human_move(x, y, cfg)
+    result = {"ok": True, "x": round(final[0]), "y": round(final[1]), "humanized": True, "preset": preset}
+    record_event("human_move_mouse", **result)
+    return result
+
+
+def human_click_at(x: int, y: int, button: str = "left", double: bool = False, preset: str = "default") -> dict[str, Any]:
+    """Click at (x, y) with human-like mouse movement and click timing."""
+    from ..human import human_click, resolve_config
+    validate_screen_point(x, y)
+    cfg = resolve_config(preset)
+    final = human_click(x, y, button=button, double=double, cfg=cfg)
+    result = {"ok": True, "x": round(final[0]), "y": round(final[1]), "button": button, "double": double, "humanized": True, "preset": preset}
+    record_event("human_click", **result)
+    return result
+
+
+def human_type_text(text: str, preset: str = "default", require_handle: int | None = None) -> dict[str, Any]:
+    """Type text with human-like per-character timing and optional typos."""
+    from ..human import human_type, resolve_config
+    if require_handle is not None:
+        active = focused_window_data().get("handle")
+        if active != require_handle:
+            raise RuntimeError(f"Fenetre active ({active}) != attendue ({require_handle})")
+    cfg = resolve_config(preset)
+    human_type(text, cfg)
+    result = {"ok": True, "length": len(text), "humanized": True, "preset": preset}
+    record_event("human_type_text", length=len(text))
+    return result
+
+
+def human_scroll_action(clicks: int, x: int | None = None, y: int | None = None, preset: str = "default") -> dict[str, Any]:
+    """Scroll with human-like inertia pattern."""
+    from ..human import human_scroll, resolve_config
+    if x is not None and y is not None:
+        validate_screen_point(x, y)
+    cfg = resolve_config(preset)
+    human_scroll(clicks, x=x, y=y, cfg=cfg)
+    result = {"ok": True, "clicks": clicks, "humanized": True, "preset": preset}
+    record_event("human_scroll", **result)
+    return result
+
+
+def human_press_key(key: str, modifiers: list[str] | None = None, preset: str = "default") -> dict[str, Any]:
+    """Press a key with human-like hold time."""
+    from ..human import human_press, resolve_config
+    cfg = resolve_config(preset)
+    human_press(key, cfg, modifiers=modifiers)
+    result = {"ok": True, "key": key, "modifiers": modifiers or [], "humanized": True, "preset": preset}
+    record_event("human_press_key", **result)
+    return result
+
+
 __all__ = [
     "click",
     "double_click",
@@ -111,4 +169,9 @@ __all__ = [
     "scroll",
     "type_text",
     "type_text_unicode",
+    "human_move_mouse",
+    "human_click_at",
+    "human_type_text",
+    "human_scroll_action",
+    "human_press_key",
 ]
