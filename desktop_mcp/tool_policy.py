@@ -77,6 +77,8 @@ _RISK_BY_TOOL_ACTION: dict[tuple[str, str], str] = {
     ("browser_network", "intercept_clear"): "medium",
     ("browser_debug", "cdp_eval"): "high",
     ("browser_content", "eval"): "high",
+    ("browser_content", "stealth_eval"): "high",
+    ("browser_content", "check_actionable"): "read",
     ("browser_content", "frame_eval"): "high",
     ("browser_content", "frame_click"): "medium",
     ("browser_content", "frame_fill"): "medium",

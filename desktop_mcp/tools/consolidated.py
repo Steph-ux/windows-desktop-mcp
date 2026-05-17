@@ -124,13 +124,14 @@ R["browser_navigate"] = (
 
 R["browser_content"] = (
     "Read DOM, execute JS, annotate elements, interact with frames/shadow DOM.\n"
-    "Actions: get, dump, text, summary, count, a11y, eval, "
+    "Actions: get, dump, text, summary, count, a11y, eval, stealth_eval, check_actionable, "
     "annotate, interactive, forms, downloads, "
     "frame_list, frame_eval, frame_click, frame_fill, shadow_query", {
     "get": _bs.browser_get_dom, "dump": _bh.browser_dump_dom,
     "text": _bs.browser_get_text, "summary": _bs.browser_get_page_summary,
     "count": _bs.browser_count_selectors,
     "a11y": _bs.browser_get_accessibility_snapshot, "eval": _bs.browser_eval,
+    "stealth_eval": _bs.browser_stealth_eval, "check_actionable": _bs.browser_check_actionable,
     "annotate": _ai.browser_annotate_page,
     "interactive": _bs.browser_list_interactive_elements,
     "forms": _bs.browser_list_form_fields, "downloads": _bs.browser_list_downloads,

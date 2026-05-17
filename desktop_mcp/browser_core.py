@@ -186,12 +186,33 @@ def playwright_launch(browser: str = "auto"):
     return sync_playwright()
 
 
-def open_playwright_runtime(browser: str = "auto", headless: bool = True, stealth: bool = False, humanize: bool = False):
+def open_playwright_runtime(
+    browser: str = "auto",
+    headless: bool = True,
+    stealth: bool = False,
+    humanize: bool = False,
+    proxy: str | None = None,
+    geoip: bool = False,
+    fingerprint_seed: int | None = None,
+    timezone: str | None = None,
+    locale: str | None = None,
+):
     browser_key = (browser or "auto").lower()
     if stealth and browser_key in {"auto", "chrome"}:
         try:
             from cloakbrowser import launch as cloak_launch
-            engine = cloak_launch(headless=headless, humanize=humanize)
+            extra_args = []
+            if fingerprint_seed is not None:
+                extra_args.append(f"--fingerprint={fingerprint_seed}")
+            engine = cloak_launch(
+                headless=headless,
+                humanize=humanize,
+                proxy=proxy,
+                geoip=geoip,
+                timezone=timezone,
+                locale=locale,
+                args=extra_args or None,
+            )
             return None, None, engine, "chrome-stealth"
         except ImportError:
             pass

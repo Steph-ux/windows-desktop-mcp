@@ -334,12 +334,49 @@ def _session_payload(session_id: str, session: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _launch_persistent_context(browser: str, profile_name: str, headless: bool) -> tuple[Any, Any, Any, Any, str, Path]:
-    playwright = playwright_launch(browser)
-    runtime = playwright.__enter__()
+def _launch_persistent_context(
+    browser: str,
+    profile_name: str,
+    headless: bool,
+    stealth: bool = False,
+    humanize: bool = False,
+    proxy: str | None = None,
+    geoip: bool = False,
+    fingerprint_seed: int | None = None,
+    timezone: str | None = None,
+    locale: str | None = None,
+) -> tuple[Any, Any, Any, Any, str, Path]:
     browser_key = (browser or "auto").lower()
     profile_path = _named_profile_path(profile_name)
     profile_path.mkdir(parents=True, exist_ok=True)
+
+    # Stealth persistent context via CloakBrowser
+    if stealth and browser_key in {"auto", "chrome"}:
+        try:
+            from cloakbrowser import launch_persistent_context as cloak_persistent
+            extra_args = []
+            if fingerprint_seed is not None:
+                extra_args.append(f"--fingerprint={fingerprint_seed}")
+            context = cloak_persistent(
+                str(profile_path),
+                headless=headless,
+                humanize=humanize,
+                proxy=proxy,
+                geoip=geoip,
+                timezone=timezone,
+                locale=locale,
+                viewport=None,
+                accept_downloads=True,
+                args=extra_args or None,
+            )
+            browser_instance = getattr(context, "browser", None)
+            return None, None, browser_instance, context, "chrome-stealth", profile_path
+        except ImportError:
+            pass
+
+    # Standard Playwright persistent context
+    playwright = playwright_launch(browser)
+    runtime = playwright.__enter__()
     if browser_key in {"auto", "chrome"}:
         context = runtime.chromium.launch_persistent_context(
             str(profile_path),
@@ -385,6 +422,11 @@ def _browser_open_session_impl(
     preset_name: str | None = None,
     stealth: bool = False,
     humanize: bool = False,
+    proxy: str | None = None,
+    geoip: bool = False,
+    fingerprint_seed: int | None = None,
+    timezone: str | None = None,
+    locale: str | None = None,
 ) -> dict[str, Any]:
     merged = _merge_browser_preset(
         preset_name,
@@ -414,9 +456,20 @@ def _browser_open_session_impl(
             browser,
             resolved_profile_name,
             headless=headless,
+            stealth=stealth,
+            humanize=humanize,
+            proxy=proxy,
+            geoip=geoip,
+            fingerprint_seed=fingerprint_seed,
+            timezone=timezone,
+            locale=locale,
         )
     else:
-        playwright_cm, runtime, engine, actual_browser = open_playwright_runtime(browser, headless=headless, stealth=stealth, humanize=humanize)
+        playwright_cm, runtime, engine, actual_browser = open_playwright_runtime(
+            browser, headless=headless, stealth=stealth, humanize=humanize,
+            proxy=proxy, geoip=geoip, fingerprint_seed=fingerprint_seed,
+            timezone=timezone, locale=locale,
+        )
         context = None
     try:
         if isinstance(width, str) and width.lower() == "auto":
@@ -541,6 +594,11 @@ def browser_open_session(
     preset_name: str | None = None,
     stealth: bool = False,
     humanize: bool = False,
+    proxy: str | None = None,
+    geoip: bool = False,
+    fingerprint_seed: int | None = None,
+    timezone: str | None = None,
+    locale: str | None = None,
 ) -> dict[str, Any]:
     return _browser_open_session_impl(
         url=url,
@@ -557,6 +615,11 @@ def browser_open_session(
         preset_name=preset_name,
         stealth=stealth,
         humanize=humanize,
+        proxy=proxy,
+        geoip=geoip,
+        fingerprint_seed=fingerprint_seed,
+        timezone=timezone,
+        locale=locale,
     )
 
 
@@ -1618,6 +1681,129 @@ def browser_eval(session_id: str, expression: str, page_id: str | None = None) -
     result = page.evaluate(expression)
     payload = {"session_id": session_id, "page_id": resolved_page_id, "result": result}
     record_event("browser_eval", session_id=session_id, page_id=resolved_page_id)
+    return payload
+def browser_check_actionable(
+    session_id: str,
+    selector: str,
+    page_id: str | None = None,
+    timeout_ms: int = 5000,
+) -> dict[str, Any]:
+    """Check if an element is visible, stable, and clickable before interacting.
+
+    Returns actionability info: visible, enabled, stable, in_viewport,
+    pointer_events, bounding_box. Use before clicking to avoid detection
+    or errors from interacting with hidden/moving elements.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    locator = page.locator(selector).first
+    checks: dict[str, Any] = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "selector": selector,
+    }
+    try:
+        checks["visible"] = locator.is_visible(timeout=timeout_ms)
+    except Exception:
+        checks["visible"] = False
+    try:
+        checks["enabled"] = locator.is_enabled(timeout=timeout_ms)
+    except Exception:
+        checks["enabled"] = False
+    try:
+        box = locator.bounding_box(timeout=timeout_ms)
+        checks["bounding_box"] = box
+        checks["in_viewport"] = box is not None
+    except Exception:
+        checks["bounding_box"] = None
+        checks["in_viewport"] = False
+    # Check pointer-events and stability via JS
+    try:
+        info = locator.evaluate("""(el) => {
+            const style = window.getComputedStyle(el);
+            const rect1 = el.getBoundingClientRect();
+            return {
+                pointer_events: style.pointerEvents,
+                opacity: parseFloat(style.opacity),
+                display: style.display,
+                visibility: style.visibility,
+                rect: { x: rect1.x, y: rect1.y, w: rect1.width, h: rect1.height },
+            };
+        }""")
+        checks["pointer_events"] = info.get("pointer_events", "unknown")
+        checks["opacity"] = info.get("opacity", 1.0)
+        checks["display"] = info.get("display", "unknown")
+        checks["css_visibility"] = info.get("visibility", "unknown")
+        checks["interactable"] = (
+            checks["visible"]
+            and checks["enabled"]
+            and checks.get("pointer_events") != "none"
+            and checks.get("opacity", 0) > 0
+            and checks.get("display") != "none"
+            and checks.get("css_visibility") != "hidden"
+        )
+    except Exception:
+        checks["interactable"] = checks["visible"] and checks["enabled"]
+    # Stability check — bounding box doesn't move over 100ms
+    try:
+        box1 = locator.bounding_box(timeout=1000)
+        page.wait_for_timeout(100)
+        box2 = locator.bounding_box(timeout=1000)
+        if box1 and box2:
+            dx = abs(box2["x"] - box1["x"])
+            dy = abs(box2["y"] - box1["y"])
+            checks["stable"] = dx < 2 and dy < 2
+        else:
+            checks["stable"] = False
+    except Exception:
+        checks["stable"] = False
+    checks["actionable"] = checks.get("interactable", False) and checks.get("stable", False)
+    record_event("browser_check_actionable", session_id=session_id, selector=selector, actionable=checks["actionable"])
+    return checks
+def browser_stealth_eval(session_id: str, expression: str, page_id: str | None = None) -> dict[str, Any]:
+    """Evaluate JS in a CDP Isolated World — invisible to page scripts.
+
+    Uses Runtime.evaluate with a unique contextId so the page's own JS
+    cannot observe the call (no MutationObserver, no Proxy trap, etc.).
+    Falls back to standard page.evaluate if CDP is unavailable.
+    """
+    validate_js_expression(expression)
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    try:
+        cdp = page.context.new_cdp_session(page)
+        try:
+            # Create an isolated world on the main frame
+            frame_tree = cdp.send("Page.getFrameTree")
+            frame_id = frame_tree["frameTree"]["frame"]["id"]
+            world = cdp.send("Page.createIsolatedWorld", {
+                "frameId": frame_id,
+                "worldName": "__stealth_eval__",
+                "grantUniveralAccess": True,
+            })
+            context_id = world["executionContextId"]
+            # Evaluate in the isolated context
+            resp = cdp.send("Runtime.evaluate", {
+                "expression": expression,
+                "contextId": context_id,
+                "returnByValue": True,
+                "awaitPromise": True,
+            })
+            if resp.get("exceptionDetails"):
+                raise RuntimeError(resp["exceptionDetails"].get("text", "CDP eval error"))
+            result = resp.get("result", {}).get("value")
+            method = "cdp_isolated_world"
+        finally:
+            cdp.detach()
+    except Exception:
+        # Fallback to standard eval
+        result = page.evaluate(expression)
+        method = "standard_fallback"
+    payload = {
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "result": result,
+        "method": method,
+    }
+    record_event("browser_stealth_eval", session_id=session_id, page_id=resolved_page_id, method=method)
     return payload
 def browser_fill_form(session_id: str, fields: list[dict[str, Any]], submit_selector: str | None = None, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
