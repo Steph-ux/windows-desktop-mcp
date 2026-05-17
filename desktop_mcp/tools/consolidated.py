@@ -234,7 +234,8 @@ R["desktop_interact"] = (
     "kb_type, kb_unicode, kb_press, kb_hotkey, "
     "clip_get, clip_set, "
     "macro_record, macro_replay, macro_list, macro_clear, "
-    "human_move, human_click, human_type, human_scroll, human_press", {
+    "human_move, human_click, human_type, human_scroll, human_press, human_idle, "
+    "check_actionable, suggest_actions", {
     "click": _inp.click, "double_click": _inp.double_click, "right_click": _inp.right_click,
     "click_text": _win.click_text, "click_ocr": _ocr.click_ocr_text,
     "click_ui": _win.click_ui_element, "click_intent": _ai.intent_click,
@@ -249,6 +250,9 @@ R["desktop_interact"] = (
     "human_move": _inp.human_move_mouse, "human_click": _inp.human_click_at,
     "human_type": _inp.human_type_text, "human_scroll": _inp.human_scroll_action,
     "human_press": _inp.human_press_key,
+    "human_idle": _ai.desktop_human_idle,
+    "check_actionable": _ai.desktop_check_actionable,
+    "suggest_actions": _ai.desktop_suggest_actions,
 })
 
 R["desktop_window"] = (
@@ -269,7 +273,7 @@ R["desktop_observe"] = (
     "Actions: capture, capture_window, capture_focused, capture_region, save_desktop, save_window, "
     "stream_start, stream_stop, stream_status, "
     "ocr_window, ocr_region, ocr_file, ocr_find, "
-    "ocr_smart, screen_understand, suggest_actions, "
+    "ocr_smart, screen_understand, observe_rich, "
     "annotate, watch, describe, overview, perception, snapshot, find_image, diff, compare, "
     "record_start, record_stop, record_status, record_list, "
     "list_monitors, capture_monitor, capture_all_monitors, monitor_at_point", {
@@ -285,7 +289,7 @@ R["desktop_observe"] = (
     "ocr_file": _ocr.ocr_image_file, "ocr_find": _ocr.find_ocr_text,
     # Smart OCR (NEW)
     "ocr_smart": _socr.ocr_smart, "screen_understand": _socr.screen_understand,
-    "suggest_actions": _socr.suggest_actions,
+    "observe_rich": _ai.desktop_observe_rich,
     # Visual analysis
     "annotate": _ai.screen_annotate, "watch": _cap.screen_watch,
     "describe": _cap.describe_screen, "overview": _cap.desktop_overview,

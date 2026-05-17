@@ -290,11 +290,24 @@ def intent_click(
     clicks: int = 1,
     use_ocr: bool = True,
 ) -> dict[str, Any]:
+    """Click an element by natural language intent — 7-strategy cascade.
+
+    Strategies (in order):
+      1. UIA exact title match
+      2. UIA contains title match
+      3. UIA automation_id match
+      4. UIA control_type + title (Button, CheckBox, MenuItem, etc.)
+      5. UIA class_name match
+      6. UIA regex title match (fuzzy)
+      7. OCR fallback with fuzzy text scoring
+    """
     focused = focused_window_data() if title_regex is None and handle is None else None
     window = find_window(title_regex=title_regex, handle=handle or (focused or {}).get("handle"))
     query = " ".join((intent or "").strip().split())
     if not query:
         raise ValueError("Provide non-empty intent.")
+
+    # Strategies 1-3: exact, contains, automation_id
     for source, kwargs in (
         ("uia_exact", {"title": query}),
         ("uia_contains", {"title_contains": query}),
@@ -308,6 +321,41 @@ def intent_click(
         result = {"ok": True, "intent": query, "source": source, "element": info, "x": None, "y": None}
         record_event("intent_click", intent=query, source=source)
         return result
+
+    # Strategy 4: control_type + title_contains for interactive roles
+    for ct in ("Button", "CheckBox", "MenuItem", "TabItem", "Hyperlink", "ComboBox", "RadioButton"):
+        matches = find_matching_elements(window, control_type=ct, title_contains=query)
+        if matches:
+            element, info = matches[0]
+            element.click_input()
+            result = {"ok": True, "intent": query, "source": f"uia_{ct.lower()}", "element": info, "x": None, "y": None}
+            record_event("intent_click", intent=query, source=f"uia_{ct.lower()}")
+            return result
+
+    # Strategy 5: class_name match
+    matches = find_matching_elements(window, class_name=query)
+    if matches:
+        element, info = matches[0]
+        element.click_input()
+        result = {"ok": True, "intent": query, "source": "uia_classname", "element": info, "x": None, "y": None}
+        record_event("intent_click", intent=query, source="uia_classname")
+        return result
+
+    # Strategy 6: regex title match
+    query_pattern = re.compile(re.escape(query), re.IGNORECASE)
+    try:
+        all_elements = find_matching_elements(window, title_contains="")
+        for element, info in all_elements:
+            title = info.get("title") or ""
+            if query_pattern.search(title):
+                element.click_input()
+                result = {"ok": True, "intent": query, "source": "uia_regex", "element": info, "x": None, "y": None}
+                record_event("intent_click", intent=query, source="uia_regex")
+                return result
+    except Exception:
+        pass
+
+    # Strategy 7: OCR with fuzzy scoring
     if use_ocr:
         info = window_info(window)
         bounds = info.get("bounds")
@@ -326,7 +374,7 @@ def intent_click(
                 result = {"ok": True, "intent": query, "source": "ocr", "element": match, "x": cx, "y": cy}
                 record_event("intent_click", intent=query, source="ocr")
                 return result
-    raise ValueError(f"No element found for intent={intent!r}. Try screen_annotate() first.")
+    raise ValueError(f"No element found for intent={intent!r}. Try desktop_suggest_actions() or screen_annotate() first.")
 
 
 def _window_text_snapshot(window: Any, use_ocr: bool = True) -> dict[str, Any]:
@@ -426,4 +474,283 @@ def desktop_watch_until(
         "detail": detail or {},
     }
     record_event("desktop_watch_until", condition_type=resolved, matched=result["matched"], elapsed_seconds=elapsed)
+    return result
+
+
+def desktop_check_actionable(
+    title_regex: str | None = None,
+    handle: int | None = None,
+    selector: str = "",
+    control_type: str | None = None,
+    timeout_ms: int = 3000,
+) -> dict[str, Any]:
+    """Check if a desktop UI element is actionable before interacting.
+
+    Verifies: exists, IsEnabled, IsOffscreen, window focused, position stable.
+    Returns detailed actionability state.
+    """
+    import win32gui
+    focused = focused_window_data() if title_regex is None and handle is None else None
+    target_handle = handle or (focused or {}).get("handle")
+    window = find_window(title_regex=title_regex, handle=target_handle)
+    w_info = window_info(window)
+
+    # Check window is focused
+    foreground_handle = win32gui.GetForegroundWindow()
+    window_focused = foreground_handle == w_info.get("handle")
+
+    # Find the element
+    query = " ".join((selector or "").strip().split())
+    kwargs: dict[str, Any] = {}
+    if query:
+        kwargs["title_contains"] = query
+    if control_type:
+        kwargs["control_type"] = control_type
+    if not kwargs:
+        raise ValueError("Provide selector or control_type.")
+
+    matches = find_matching_elements(window, **kwargs)
+    if not matches:
+        return {
+            "ok": False, "actionable": False, "exists": False,
+            "reason": f"No element found for selector={selector!r}",
+        }
+
+    element, info = matches[0]
+
+    # Check IsEnabled
+    try:
+        is_enabled = element.is_enabled()
+    except Exception:
+        is_enabled = True  # assume enabled if can't check
+
+    # Check IsOffscreen (not visible)
+    try:
+        rect = element.rectangle()
+        is_offscreen = rect.width() <= 0 or rect.height() <= 0
+    except Exception:
+        is_offscreen = False
+
+    # Check position stability (sample twice with 100ms gap)
+    try:
+        rect1 = element.rectangle()
+        pos1 = (rect1.left, rect1.top)
+        time.sleep(0.1)
+        rect2 = element.rectangle()
+        pos2 = (rect2.left, rect2.top)
+        is_stable = pos1 == pos2
+    except Exception:
+        is_stable = True
+
+    actionable = is_enabled and not is_offscreen and is_stable
+    result = {
+        "ok": True,
+        "actionable": actionable,
+        "exists": True,
+        "is_enabled": is_enabled,
+        "is_offscreen": is_offscreen,
+        "is_stable": is_stable,
+        "window_focused": window_focused,
+        "element": info,
+    }
+    if not actionable:
+        reasons = []
+        if not is_enabled:
+            reasons.append("disabled")
+        if is_offscreen:
+            reasons.append("offscreen")
+        if not is_stable:
+            reasons.append("unstable position")
+        result["reason"] = ", ".join(reasons)
+    record_event("desktop_check_actionable", actionable=actionable, selector=selector)
+    return result
+
+
+def desktop_suggest_actions(
+    title_regex: str | None = None,
+    handle: int | None = None,
+    max_items: int = 30,
+    use_ocr: bool = False,
+) -> dict[str, Any]:
+    """Scan the focused/target window and suggest possible actions.
+
+    Uses UIA tree to find all interactive controls (buttons, checkboxes,
+    menus, etc.) with positions and ready-to-use action strings.
+    Falls back to OCR if use_ocr=True.
+    """
+    focused = focused_window_data() if title_regex is None and handle is None else None
+    window = find_window(title_regex=title_regex, handle=handle or (focused or {}).get("handle"))
+    w_info = window_info(window)
+    safe_max = max(1, min(int(max_items), 100))
+    suggestions: list[dict[str, Any]] = []
+
+    interactive_types = {
+        "Button": "click", "CheckBox": "toggle", "RadioButton": "toggle",
+        "MenuItem": "click", "TabItem": "click", "Hyperlink": "click",
+        "ComboBox": "select", "Edit": "fill", "Slider": "drag",
+        "ListItem": "click", "TreeItem": "click",
+    }
+    for ct, action_type in interactive_types.items():
+        if len(suggestions) >= safe_max:
+            break
+        try:
+            matches = find_matching_elements(window, control_type=ct)
+            for element, info in matches:
+                if len(suggestions) >= safe_max:
+                    break
+                title = (info.get("title") or "").strip()
+                bounds = info.get("bounds")
+                if not bounds:
+                    continue
+                try:
+                    enabled = element.is_enabled()
+                except Exception:
+                    enabled = True
+                if not enabled:
+                    continue
+                cx = bounds.get("left", 0) + bounds.get("width", 0) // 2
+                cy = bounds.get("top", 0) + bounds.get("height", 0) // 2
+                suggestions.append({
+                    "control_type": ct,
+                    "text": title[:80],
+                    "action_type": action_type,
+                    "x": cx,
+                    "y": cy,
+                    "width": bounds.get("width", 0),
+                    "height": bounds.get("height", 0),
+                    "enabled": enabled,
+                    "suggested_action": f'desktop_interact(action="click_intent", intent="{title}")' if action_type == "click" else f'desktop_interact(action="click", x={cx}, y={cy})',
+                })
+        except Exception:
+            continue
+
+    # OCR fallback for additional text-based suggestions
+    if use_ocr and len(suggestions) < safe_max:
+        try:
+            info = window_info(window)
+            bounds = info.get("bounds")
+            if bounds:
+                region = window_capture_bounds(bounds, padding=0)
+                png_bytes, _ = grab_png_bytes(region)
+                image = PILImage.open(io.BytesIO(png_bytes))
+                ocr = ocr_image_object(image)
+                for word in (ocr.get("words") or [])[:safe_max - len(suggestions)]:
+                    text = word.get("text", "").strip()
+                    if len(text) < 2:
+                        continue
+                    wx = int(region["left"]) + int(word.get("left", 0)) + int(word.get("width", 0)) // 2
+                    wy = int(region["top"]) + int(word.get("top", 0)) + int(word.get("height", 0)) // 2
+                    suggestions.append({
+                        "control_type": "ocr_text",
+                        "text": text[:80],
+                        "action_type": "click",
+                        "x": wx,
+                        "y": wy,
+                        "source": "ocr",
+                        "suggested_action": f'desktop_interact(action="click", x={wx}, y={wy})',
+                    })
+        except Exception:
+            pass
+
+    result = {
+        "ok": True,
+        "suggestions": suggestions,
+        "count": len(suggestions),
+        "window": w_info,
+    }
+    record_event("desktop_suggest_actions", count=len(suggestions))
+    return result
+
+
+def desktop_observe_rich(
+    title_regex: str | None = None,
+    handle: int | None = None,
+    include_interactive: bool = True,
+    include_text: bool = True,
+    max_interactive: int = 30,
+    use_ocr: bool = True,
+) -> dict[str, Any]:
+    """Rich desktop observation: window state + interactive elements + visible text.
+
+    Combines window info, UIA tree scan, and OCR text extraction
+    into a single observation for model-side planning.
+    """
+    focused = focused_window_data() if title_regex is None and handle is None else None
+    window = find_window(title_regex=title_regex, handle=handle or (focused or {}).get("handle"))
+    w_info = window_info(window)
+    observation: dict[str, Any] = {
+        "ok": True,
+        "window": w_info,
+        "focused": w_info.get("handle") == (focused or {}).get("handle"),
+    }
+
+    if include_interactive:
+        try:
+            actions = desktop_suggest_actions(
+                handle=w_info.get("handle"), max_items=max_interactive, use_ocr=False,
+            )
+            observation["interactive"] = actions.get("suggestions", [])
+            observation["interactive_count"] = actions.get("count", 0)
+        except Exception as e:
+            observation["interactive"] = []
+            observation["interactive_error"] = str(e)
+
+    if include_text:
+        try:
+            snapshot = _window_text_snapshot(window, use_ocr=use_ocr)
+            observation["uia_titles"] = snapshot.get("titles", [])[:50]
+            observation["ocr_text"] = (snapshot.get("ocr_text") or "")[:3000]
+        except Exception:
+            observation["uia_titles"] = []
+            observation["ocr_text"] = ""
+
+    record_event("desktop_observe_rich", handle=w_info.get("handle"))
+    return observation
+
+
+def desktop_human_idle(
+    title_regex: str | None = None,
+    handle: int | None = None,
+    duration_ms: int = 2000,
+    preset: str = "default",
+) -> dict[str, Any]:
+    """Simulate human idle behavior between desktop actions.
+
+    Adds small random mouse micro-movements within the target window
+    and variable wait times to appear more human-like.
+    """
+    import random
+    from .human import human_move, resolve_config
+
+    focused = focused_window_data() if title_regex is None and handle is None else None
+    window = find_window(title_regex=title_regex, handle=handle or (focused or {}).get("handle"))
+    w_info = window_info(window)
+    bounds = w_info.get("bounds", {})
+    safe_duration = max(200, min(int(duration_ms), 10000))
+    cfg = resolve_config(preset)
+
+    left = bounds.get("left", 100)
+    top = bounds.get("top", 100)
+    width = bounds.get("width", 800)
+    height = bounds.get("height", 600)
+
+    steps = random.randint(1, 3)
+    for _ in range(steps):
+        x = random.randint(left + int(width * 0.1), left + int(width * 0.9))
+        y = random.randint(top + int(height * 0.1), top + int(height * 0.9))
+        try:
+            validate_screen_point(x, y)
+            human_move(x, y, cfg)
+        except Exception:
+            pass
+        time.sleep(random.uniform(0.1, safe_duration / 1000.0 / steps))
+
+    result = {
+        "ok": True,
+        "idle_ms": safe_duration,
+        "mouse_steps": steps,
+        "window": {"handle": w_info.get("handle"), "title": w_info.get("title")},
+        "preset": preset,
+    }
+    record_event("desktop_human_idle", idle_ms=safe_duration, steps=steps)
     return result
