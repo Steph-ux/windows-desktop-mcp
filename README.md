@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Windows desktop & browser control MCP server - **18 super-tools** for full automation.
+Windows desktop & browser control MCP server — **21 tools, 319 actions** for full automation.
 
 ## Install
 
@@ -25,47 +25,191 @@ playwright install chromium
 }
 ```
 
-## Dashboard (New!)
+## Dashboard
 
-Monitor tools usage, MCP events, and capture history in real-time with the local dashboard:
+Monitor tools usage, MCP events, and capture history in real-time:
 
 ```bash
 desktop-mcp-dashboard
 ```
 Then open `http://localhost:8080` in your browser.
 
-## Super-Tools (19)
+## Tools (21)
 
 | Tool | Actions | Domain |
 |---|---|---|
+| `do` | *(global router)* | Natural language → auto-route to any tool/action |
 | `browser_session` | open, user_open, close, attach_cdp, profiles, presets… | Browser lifecycle |
-| `browser_navigate` | goto, back, forward, scroll, pages… | Navigation |
-| `browser_content` | DOM, text, eval, frames, shadow DOM… | Content |
-| `browser_interact` | click, type, fill, upload… | Interaction |
-| `browser_observe` | screenshots, wait conditions… | Observation |
-| `browser_network` | cookies, intercept, HAR, storage… | Network |
+| `browser_navigate` | goto, back, forward, scroll, scroll_extract, smart_wait, pages, tab_summary… | Navigation |
+| `browser_content` | DOM, text, eval, stealth_eval, frames, shadow DOM… | Content |
+| `browser_interact` | click, type, fill, smart_fill, auto_login, upload… | Interaction |
+| `browser_observe` | screenshots, wait conditions, page_diff, captcha_detect, perf_profile, pdf_export… | Observation |
+| `browser_session_state` | save, restore, cookie_list/get/set/delete/clear | Session persistence |
+| `browser_network` | cookies, intercept, intercept_smart, HAR, capture, storage… | Network |
 | `browser_debug` | traces, coverage, CDP, metrics… | Debug |
 | `agent_browser` | ensure_profile, start, status, stop | Dedicated agent browser |
 | `social_media` | platform_url, supported_platforms, search, extract, detail | Read-only social DOM extraction |
-| `desktop_interact` | click, keyboard, mouse, clipboard, macros | Desktop input |
+| `desktop_interact` | click, keyboard, mouse, clipboard, macros, human simulation… | Desktop input |
 | `desktop_window` | list, focus, resize, UI inspect… | Windows |
-| `desktop_observe` | capture, OCR, smart OCR, video, monitors | Vision |
+| `desktop_observe` | capture, OCR, smart OCR, video, monitors, screenshot_actions… | Vision |
 | `desktop_monitor` | watchers, wait conditions… | Monitoring |
 | `system_info` | sysinfo, network, services, registry… | System |
 | `system_ops` | files, processes, archives… | Operations |
-| `runtime` | health, events, status… | MCP runtime |
+| `runtime` | health, events, clipboard_bridge, replay_last, proxy_manager, multi_browser, recorder… | MCP runtime & utilities |
 | `workflow` | run, record, templates, plugins… | Automation |
 | `operator` | start, step, finish, session | Model-operated task sessions |
 | `goal` | create, status, list, history, step, pause, resume, complete, fail, clear | Persistent long-running goals |
 
-## Key Features
+## AI Intelligence Features
+
+### Global Router (`do`)
+One-shot natural language routing for models that struggle with 20+ tools:
+```python
+do(instruction="scroll down the page")           # → browser_navigate.scroll
+do(instruction="take a screenshot")               # → desktop_observe.capture
+do(instruction="go to https://example.com")       # → browser_navigate.goto
+do(instruction="click the login button")          # → browser_interact.click_intent
+```
+
+### Error Recovery
+Every failed action returns `suggested_fix`, `hint`, and `example`:
+```json
+{
+  "ok": false,
+  "error": "Unknown session 'abc'",
+  "suggested_fix": "browser_session(action='open', kwargs='{\"url\": \"...\"}')",
+  "hint": "No active browser session. Open one first, then retry."
+}
+```
+
+### Batch Actions
+Chain multiple actions in one call:
+```python
+browser_interact(action="batch", actions=[
+    {"action": "click_text", "text": "Login"},
+    {"action": "type", "selector": "#email", "text": "user@example.com"},
+    {"action": "press", "key": "Enter"}
+])
+```
+
+### Context Memory
+Track state across actions — last action, tool, URL, error, action count:
+```python
+runtime(action="context")  # → {"last_action": "click", "last_url": "...", "action_count": 42}
+```
+
+### Smart Wait
+Wait for page stability (network idle + DOM stable + visual stable) instead of arbitrary sleeps:
+```python
+browser_navigate(action="smart_wait", timeout_ms=10000, checks=["network", "dom", "visual"])
+```
+
+### Network Intercept
+Block ads, mock APIs, or capture all requests:
+```python
+browser_network(action="intercept_smart", sub_action="add_rule", pattern="**/*.png", block=True)
+browser_network(action="intercept_smart", sub_action="capture_start")
+```
+
+### Session Persistence
+Save and restore full browser state (cookies, localStorage, URL):
+```python
+browser_session_state(action="save", session_id="my_session")
+browser_session_state(action="restore", session_id="my_session")
+```
+
+### Smart Form Fill
+Auto-detect form fields and fill by fuzzy matching labels/placeholders:
+```python
+browser_interact(action="smart_fill", fields={"Email": "user@test.com", "Password": "secret"})
+```
+
+### Auto-Login
+Detect login forms automatically and fill credentials:
+```python
+browser_interact(action="auto_login", credentials={"username": "admin", "password": "pass"})
+```
+
+### Page Diff
+Compare page state before/after actions (DOM + visual):
+```python
+browser_observe(action="page_diff", mode="full")  # First call = baseline
+# ... perform actions ...
+browser_observe(action="page_diff", mode="full")  # Second call = diff result
+```
+
+### Captcha Detection
+Detect reCAPTCHA, hCaptcha, Cloudflare Turnstile, FunCaptcha:
+```python
+browser_observe(action="captcha_detect")
+# → {"captcha_detected": true, "captcha_types": ["cloudflare_turnstile"]}
+```
+
+### Multi-Browser Parallel
+Scrape N URLs simultaneously:
+```python
+runtime(action="multi_browser", urls=["https://a.com", "https://b.com"], action_per_page="text")
+```
+
+### Action Recorder
+Record and replay action sequences:
+```python
+runtime(action="recorder", sub_action="start", name="login_flow")
+runtime(action="recorder", sub_action="add_step", step_tool="browser_interact", step_action="click_text", step_kwargs={"text": "Login"})
+runtime(action="recorder", sub_action="stop")
+runtime(action="recorder", sub_action="replay", name="login_flow")
+```
+
+### Proxy Manager
+Round-robin proxy pool with health checks:
+```python
+runtime(action="proxy_manager", sub_action="add", proxy_url="http://proxy:8080")
+runtime(action="proxy_manager", sub_action="next")  # → next healthy proxy
+```
+
+### Screenshot → Actions
+Capture + annotate interactive elements + suggest next actions:
+```python
+desktop_observe(action="screenshot_actions")
+# → {"screenshot": "...", "elements": [...], "suggestions": ["click_intent('Save')", ...]}
+```
+
+### Performance Profiler
+Measure page load time, FCP, resource sizes, DOM count:
+```python
+browser_observe(action="perf_profile")
+# → {"load_time_ms": 1200, "first_contentful_paint_ms": 450, "resource_count": 34, ...}
+```
+
+### PDF/Image Export
+Export page as PDF or full-page screenshot:
+```python
+browser_observe(action="pdf_export", format_type="pdf")
+browser_observe(action="pdf_export", format_type="image", full_page=True)
+```
+
+### Cookie Editor
+Full CRUD on browser cookies:
+```python
+browser_session_state(action="cookie_list")
+browser_session_state(action="cookie_set", name="token", value="abc123")
+browser_session_state(action="cookie_delete", name="token")
+```
+
+### Clipboard Bridge
+Copy between browser and desktop clipboard:
+```python
+runtime(action="clipboard_bridge", direction="browser_to_desktop")
+```
+
+## Core Features
 
 - **Smart OCR** — fuzzy text matching on screen with element positions
 - **Video Recording** — capture desktop sessions as WebM/GIF
 - **Multi-Monitor** — capture and interact across all displays
 - **Workflow Engine** — chain actions, use variables, pre-built templates
 - **Operator Sessions** — log goals, steps, risk, evidence, and outcomes
-- **Persistent Goals** - store long-running objectives, policies, steps, evidence, status, and history across turns/restarts
+- **Persistent Goals** — store long-running objectives, policies, steps, evidence, status, and history across turns/restarts
 - **Dedicated Agent Browser** — isolated Playwright profiles for model-controlled browsing without using the host mouse, keyboard, or default browser
 - **Social Media Read-Only DOM Extraction** — X, YouTube, YouTube Studio, TikTok, and Instagram search/read scenarios through DOM/CDP instead of OCR where possible
 - **Strict Non-Interactive Mode** — blocks host mouse, keyboard, focus, and default-browser actions unless the host/user explicitly confirms
