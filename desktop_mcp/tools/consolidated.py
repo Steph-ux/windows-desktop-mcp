@@ -35,8 +35,51 @@ from ..tool_policy import evaluate_host_interaction_guard
 DEFAULT_TIMEOUT_MS = 30000
 
 
+def _action_schema(fn) -> dict[str, Any]:
+    """Extract parameter schema from a function signature for help output."""
+    sig = inspect.signature(fn)
+    params = {}
+    for name, p in sig.parameters.items():
+        if name.startswith("_"):
+            continue
+        info: dict[str, Any] = {}
+        if p.annotation != inspect.Parameter.empty:
+            ann = p.annotation
+            info["type"] = getattr(ann, "__name__", str(ann))
+        if p.default != inspect.Parameter.empty:
+            info["default"] = repr(p.default) if not isinstance(p.default, (int, float, bool, str, type(None))) else p.default
+        if p.kind == inspect.Parameter.VAR_KEYWORD:
+            info["type"] = "**kwargs"
+        params[name] = info
+    return params
+
+
+def _build_help(actions: dict[str, Any], tool_name: str, filter_action: str = "") -> dict[str, Any]:
+    """Build help/schema response for all or one action in a tool."""
+    if filter_action and filter_action in actions:
+        fn = actions[filter_action]
+        return {
+            "ok": True,
+            "tool": tool_name,
+            "action": filter_action,
+            "description": (fn.__doc__ or "").strip().split("\n")[0],
+            "parameters": _action_schema(fn),
+        }
+    result = []
+    for name, fn in sorted(actions.items()):
+        doc = (fn.__doc__ or "").strip().split("\n")[0]
+        schema = _action_schema(fn)
+        result.append({"action": name, "description": doc, "parameters": schema})
+    return {"ok": True, "tool": tool_name, "actions": result, "count": len(result)}
+
+
 def _d(actions, action, tool_name="", timeout_ms=None, **kw):
     """Dispatch to an action with structured error handling and optional timeout."""
+    # Built-in help action — returns schema for all actions
+    if action == "help":
+        filter_action = kw.get("action_name", "") or kw.get("name", "")
+        return _build_help(actions, tool_name, filter_action)
+
     fn = actions.get(action)
     if not fn:
         return {"ok": False, "error": f"Unknown action: {action!r}",
