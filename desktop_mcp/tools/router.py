@@ -209,6 +209,203 @@ def clipboard_bridge(direction: str = "browser_to_desktop", session_id: str = ""
         return {"ok": False, "error": f"direction must be 'browser_to_desktop' or 'desktop_to_browser', got {direction!r}"}
 
 
+_PROXY_POOL: list[dict[str, Any]] = []
+
+
+def proxy_manager(
+    action: str = "list",
+    proxy_url: str = "",
+    label: str = "",
+) -> dict[str, Any]:
+    """Manage proxy pool for browser sessions.
+    
+    action: 'add', 'remove', 'list', 'next' (round-robin), 'health_check'.
+    proxy_url: e.g. 'http://user:pass@proxy.com:8080' or 'socks5://proxy:1080'.
+    """
+    import urllib.request
+    
+    if action == "list":
+        return {"ok": True, "proxies": _PROXY_POOL, "count": len(_PROXY_POOL)}
+    
+    elif action == "add":
+        if not proxy_url:
+            return {"ok": False, "error": "proxy_url required"}
+        entry = {"url": proxy_url, "label": label or proxy_url[:30], "healthy": True, "uses": 0}
+        _PROXY_POOL.append(entry)
+        return {"ok": True, "added": entry, "total": len(_PROXY_POOL)}
+    
+    elif action == "remove":
+        before = len(_PROXY_POOL)
+        _PROXY_POOL[:] = [p for p in _PROXY_POOL if p["url"] != proxy_url and p["label"] != proxy_url]
+        return {"ok": True, "removed": before - len(_PROXY_POOL), "remaining": len(_PROXY_POOL)}
+    
+    elif action == "next":
+        healthy = [p for p in _PROXY_POOL if p.get("healthy", True)]
+        if not healthy:
+            return {"ok": False, "error": "No healthy proxies available"}
+        # Round-robin: pick the one with fewest uses
+        proxy = min(healthy, key=lambda p: p["uses"])
+        proxy["uses"] += 1
+        return {"ok": True, "proxy": proxy["url"], "label": proxy["label"], "uses": proxy["uses"]}
+    
+    elif action == "health_check":
+        results = []
+        for p in _PROXY_POOL:
+            try:
+                proxy_handler = urllib.request.ProxyHandler({"http": p["url"], "https": p["url"]})
+                opener = urllib.request.build_opener(proxy_handler)
+                opener.open("http://httpbin.org/ip", timeout=5)
+                p["healthy"] = True
+                results.append({"url": p["url"], "healthy": True})
+            except Exception as e:
+                p["healthy"] = False
+                results.append({"url": p["url"], "healthy": False, "error": str(e)[:100]})
+        return {"ok": True, "results": results, "healthy_count": sum(1 for r in results if r["healthy"])}
+    
+    return {"ok": False, "error": f"Unknown proxy action: {action}"}
+
+
+def multi_browser_run(
+    urls: list[str] | None = None,
+    action_per_page: str = "text",
+    max_parallel: int = 3,
+) -> dict[str, Any]:
+    """Open multiple URLs in parallel sessions and extract content.
+    
+    action_per_page: 'text' (get page text), 'screenshot' (capture), 'links' (extract links).
+    Returns results for all URLs.
+    """
+    if not urls:
+        return {"ok": False, "error": "urls list required"}
+    
+    from ..browser_sessions import get_playwright_session, list_playwright_sessions
+    from ..tools.browser_sessions import (
+        browser_open_session, browser_navigate as _nav,
+        browser_get_text, browser_scroll_extract,
+    )
+    from ..tools.browser_helpers import browser_capture_page
+    import concurrent.futures
+    
+    results = []
+    
+    def _process_url(url: str) -> dict[str, Any]:
+        try:
+            session = browser_open_session(url=url)
+            sid = session.get("session_id", "")
+            if not sid:
+                return {"url": url, "ok": False, "error": "Failed to open session"}
+            
+            if action_per_page == "text":
+                data = browser_scroll_extract(session_id=sid, max_scrolls=2, extract_mode="text")
+            elif action_per_page == "screenshot":
+                data = browser_capture_page(session_id=sid)
+            elif action_per_page == "links":
+                data = browser_scroll_extract(session_id=sid, max_scrolls=2, extract_mode="links")
+            else:
+                data = browser_get_text(session_id=sid)
+            
+            return {"url": url, "ok": True, "session_id": sid, **data}
+        except Exception as e:
+            return {"url": url, "ok": False, "error": str(e)}
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor:
+        futures = {executor.submit(_process_url, url): url for url in urls[:10]}
+        for future in concurrent.futures.as_completed(futures):
+            results.append(future.result())
+    
+    return {
+        "ok": all(r.get("ok", False) for r in results),
+        "results": results,
+        "total": len(results),
+        "succeeded": sum(1 for r in results if r.get("ok")),
+    }
+
+
+def action_recorder(
+    action: str = "status",
+    name: str = "",
+    step_tool: str = "",
+    step_action: str = "",
+    step_kwargs: dict | None = None,
+) -> dict[str, Any]:
+    """Record and replay action sequences.
+    
+    action: 'start', 'stop', 'add_step', 'replay', 'list', 'delete', 'status'.
+    """
+    import json as _json
+    import os
+    
+    recordings_dir = os.path.join(os.path.expanduser("~"), ".mcp_recordings")
+    os.makedirs(recordings_dir, exist_ok=True)
+    
+    # Use a module-level variable for current recording
+    if not hasattr(action_recorder, "_current"):
+        action_recorder._current = None
+        action_recorder._steps = []
+    
+    if action == "start":
+        if not name:
+            return {"ok": False, "error": "name required to start recording"}
+        action_recorder._current = name
+        action_recorder._steps = []
+        return {"ok": True, "recording": name, "status": "started"}
+    
+    elif action == "add_step":
+        if not action_recorder._current:
+            return {"ok": False, "error": "No recording in progress. Call start first."}
+        action_recorder._steps.append({
+            "tool": step_tool,
+            "action": step_action,
+            "kwargs": step_kwargs or {},
+        })
+        return {"ok": True, "recording": action_recorder._current, "steps": len(action_recorder._steps)}
+    
+    elif action == "stop":
+        if not action_recorder._current:
+            return {"ok": False, "error": "No recording in progress"}
+        path = os.path.join(recordings_dir, f"{action_recorder._current}.json")
+        with open(path, "w") as f:
+            _json.dump({"name": action_recorder._current, "steps": action_recorder._steps}, f, indent=2)
+        result = {"ok": True, "recording": action_recorder._current, "steps": len(action_recorder._steps), "path": path}
+        action_recorder._current = None
+        action_recorder._steps = []
+        return result
+    
+    elif action == "list":
+        files = [f.replace(".json", "") for f in os.listdir(recordings_dir) if f.endswith(".json")]
+        return {"ok": True, "recordings": files, "count": len(files)}
+    
+    elif action == "delete":
+        path = os.path.join(recordings_dir, f"{name}.json")
+        if os.path.exists(path):
+            os.remove(path)
+            return {"ok": True, "deleted": name}
+        return {"ok": False, "error": f"Recording '{name}' not found"}
+    
+    elif action == "replay":
+        path = os.path.join(recordings_dir, f"{name}.json")
+        if not os.path.exists(path):
+            return {"ok": False, "error": f"Recording '{name}' not found"}
+        with open(path) as f:
+            data = _json.load(f)
+        return {
+            "ok": True,
+            "name": data["name"],
+            "steps": data["steps"],
+            "step_count": len(data["steps"]),
+            "hint": "Use batch to execute these steps: browser_interact(action='batch', kwargs='{\"actions\": [...]}')",
+        }
+    
+    elif action == "status":
+        return {
+            "ok": True,
+            "recording": action_recorder._current,
+            "steps_recorded": len(action_recorder._steps) if action_recorder._current else 0,
+        }
+    
+    return {"ok": False, "error": f"Unknown recorder action: {action}"}
+
+
 def replay_last(count: int = 5) -> dict[str, Any]:
     """Replay the last N actions from the event log.
     

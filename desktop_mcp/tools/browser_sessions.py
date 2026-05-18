@@ -3320,6 +3320,534 @@ def _legacy_awaitable(value: Any) -> Any:
     return value
 
 
+# ═══ PHASE 10-21: ADVANCED BROWSER FEATURES ═══════════════════════
+
+def browser_smart_wait(
+    session_id: str = "",
+    timeout_ms: int = 15000,
+    checks: list[str] | None = None,
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Smart wait: network idle + DOM stable + no visual change.
+    
+    checks: list of checks to run. Default: ['network', 'dom', 'visual'].
+    Waits for ALL checks to pass within timeout.
+    """
+    import time as _time
+    checks = checks or ["network", "dom", "visual"]
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    t0 = _time.monotonic()
+    deadline = t0 + timeout_ms / 1000
+    results: dict[str, bool] = {}
+
+    if "network" in checks:
+        try:
+            page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 8000))
+            results["network_idle"] = True
+        except Exception:
+            results["network_idle"] = False
+
+    if "dom" in checks:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=3000)
+            dom_hash_1 = page.evaluate("() => document.body?.innerHTML?.length || 0")
+            _time.sleep(0.3)
+            dom_hash_2 = page.evaluate("() => document.body?.innerHTML?.length || 0")
+            results["dom_stable"] = dom_hash_1 == dom_hash_2
+        except Exception:
+            results["dom_stable"] = False
+
+    if "visual" in checks:
+        try:
+            snap1 = page.evaluate("() => document.body?.scrollHeight || 0")
+            _time.sleep(0.4)
+            snap2 = page.evaluate("() => document.body?.scrollHeight || 0")
+            results["visual_stable"] = snap1 == snap2
+        except Exception:
+            results["visual_stable"] = False
+
+    elapsed = round((_time.monotonic() - t0) * 1000)
+    all_ok = all(results.values())
+    return {
+        "ok": all_ok,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "checks": results,
+        "elapsed_ms": elapsed,
+        "url": page.url,
+    }
+
+
+def browser_network_intercept(
+    session_id: str = "",
+    action: str = "list_rules",
+    pattern: str = "",
+    response_body: str = "",
+    response_status: int = 200,
+    block: bool = False,
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Intercept network requests: block, mock, or capture.
+    
+    action: 'add_rule', 'remove_rule', 'list_rules', 'capture_start', 'capture_stop', 'capture_get'.
+    pattern: URL glob pattern (e.g. '**/*.png', '**/api/users*').
+    """
+    session, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+
+    # Store intercept rules in session
+    if "intercept_rules" not in session:
+        session["intercept_rules"] = []
+    if "captured_requests" not in session:
+        session["captured_requests"] = []
+    if "capturing" not in session:
+        session["capturing"] = False
+
+    if action == "list_rules":
+        return {"ok": True, "rules": session["intercept_rules"], "capturing": session["capturing"]}
+
+    elif action == "add_rule":
+        if not pattern:
+            return {"ok": False, "error": "pattern required for add_rule"}
+        rule = {"pattern": pattern, "block": block, "mock_body": response_body, "mock_status": response_status}
+        session["intercept_rules"].append(rule)
+
+        def _route_handler(route):
+            url = route.request.url
+            for r in session.get("intercept_rules", []):
+                import fnmatch
+                if fnmatch.fnmatch(url, r["pattern"]):
+                    if r["block"]:
+                        route.abort()
+                        return
+                    if r["mock_body"]:
+                        route.fulfill(status=r["mock_status"], body=r["mock_body"])
+                        return
+            route.continue_()
+
+        try:
+            page.route(pattern, _route_handler)
+        except Exception:
+            pass
+        return {"ok": True, "added": rule, "total_rules": len(session["intercept_rules"])}
+
+    elif action == "remove_rule":
+        before = len(session["intercept_rules"])
+        session["intercept_rules"] = [r for r in session["intercept_rules"] if r["pattern"] != pattern]
+        try:
+            page.unroute(pattern)
+        except Exception:
+            pass
+        return {"ok": True, "removed": before - len(session["intercept_rules"]), "remaining": len(session["intercept_rules"])}
+
+    elif action == "capture_start":
+        session["capturing"] = True
+        session["captured_requests"] = []
+
+        def _capture_handler(request):
+            if session.get("capturing"):
+                session["captured_requests"].append({
+                    "url": request.url,
+                    "method": request.method,
+                    "resource_type": request.resource_type,
+                    "headers": dict(request.headers) if len(request.headers) < 20 else {"count": len(request.headers)},
+                })
+
+        page.on("request", _capture_handler)
+        return {"ok": True, "capturing": True}
+
+    elif action == "capture_stop":
+        session["capturing"] = False
+        return {"ok": True, "capturing": False, "captured_count": len(session.get("captured_requests", []))}
+
+    elif action == "capture_get":
+        reqs = session.get("captured_requests", [])
+        return {"ok": True, "requests": reqs[-100:], "total": len(reqs)}
+
+    return {"ok": False, "error": f"Unknown intercept action: {action}"}
+
+
+def browser_save_session(
+    session_id: str = "",
+    path: str = "",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Save browser session state (cookies, storage, URL) to a JSON file."""
+    import json as _json
+    import os
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    session = get_playwright_session(session_id)
+    context = session.get("context")
+
+    if not path:
+        path = os.path.join(os.path.expanduser("~"), ".mcp_sessions", f"{session_id}.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    state = {
+        "session_id": session_id,
+        "url": page.url,
+        "title": page.title(),
+        "cookies": context.cookies() if context else [],
+        "local_storage": page.evaluate("() => { try { return JSON.parse(JSON.stringify(localStorage)); } catch { return {}; } }"),
+        "session_storage": page.evaluate("() => { try { return JSON.parse(JSON.stringify(sessionStorage)); } catch { return {}; } }"),
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(state, f, indent=2, default=str)
+
+    record_event("browser_save_session", session_id=session_id, path=path)
+    return {"ok": True, "path": path, "cookies": len(state["cookies"]), "url": state["url"]}
+
+
+def browser_restore_session(
+    session_id: str = "",
+    path: str = "",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Restore browser session state (cookies, storage, URL) from a JSON file."""
+    import json as _json
+    import os
+    if not path:
+        path = os.path.join(os.path.expanduser("~"), ".mcp_sessions", f"{session_id}.json")
+
+    if not os.path.exists(path):
+        return {"ok": False, "error": f"Session file not found: {path}"}
+
+    with open(path, "r", encoding="utf-8") as f:
+        state = _json.load(f)
+
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    session = get_playwright_session(session_id)
+    context = session.get("context")
+
+    # Restore cookies
+    if context and state.get("cookies"):
+        context.add_cookies(state["cookies"])
+
+    # Navigate to saved URL
+    if state.get("url") and state["url"] != "about:blank":
+        page.goto(state["url"], wait_until="domcontentloaded", timeout=15000)
+
+    # Restore storage
+    if state.get("local_storage"):
+        for k, v in state["local_storage"].items():
+            page.evaluate(f"() => localStorage.setItem({_json.dumps(k)}, {_json.dumps(v)})")
+    if state.get("session_storage"):
+        for k, v in state["session_storage"].items():
+            page.evaluate(f"() => sessionStorage.setItem({_json.dumps(k)}, {_json.dumps(v)})")
+
+    record_event("browser_restore_session", session_id=session_id, path=path)
+    return {"ok": True, "path": path, "url": state.get("url"), "cookies_restored": len(state.get("cookies", []))}
+
+
+def browser_page_diff(
+    session_id: str = "",
+    mode: str = "dom",
+    selector: str = "body",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Capture a page snapshot for diffing. Call twice to compare before/after.
+    
+    mode: 'dom' (text content), 'visual' (screenshot hash), 'full' (both).
+    First call stores baseline, second call returns diff.
+    """
+    import time as _time
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    session = get_playwright_session(session_id)
+
+    current: dict[str, Any] = {}
+    if mode in ("dom", "full"):
+        current["text"] = page.evaluate(f"""() => {{
+            const el = document.querySelector('{selector}');
+            return el ? el.innerText.trim().slice(0, 5000) : '';
+        }}""")
+        current["html_length"] = page.evaluate(f"() => document.querySelector('{selector}')?.innerHTML?.length || 0")
+    if mode in ("visual", "full"):
+        try:
+            screenshot = page.locator(selector).first.screenshot()
+            current["visual_hash"] = hashlib.sha256(screenshot).hexdigest()
+        except Exception:
+            current["visual_hash"] = ""
+    current["url"] = page.url
+    current["timestamp"] = _time.time()
+
+    baseline = session.get("_diff_baseline")
+    if not baseline:
+        session["_diff_baseline"] = current
+        return {"ok": True, "phase": "baseline_stored", "hint": "Perform actions, then call page_diff again to see changes."}
+
+    # Compare
+    diff_result: dict[str, Any] = {"ok": True, "phase": "diff"}
+    if "text" in baseline and "text" in current:
+        b_lines = set(baseline["text"].split("\n"))
+        c_lines = set(current["text"].split("\n"))
+        diff_result["text_added"] = list(c_lines - b_lines)[:30]
+        diff_result["text_removed"] = list(b_lines - c_lines)[:30]
+        diff_result["text_changed"] = baseline["text"] != current["text"]
+    if "visual_hash" in baseline and "visual_hash" in current:
+        diff_result["visual_changed"] = baseline["visual_hash"] != current["visual_hash"]
+    diff_result["url_changed"] = baseline["url"] != current["url"]
+    diff_result["before_url"] = baseline["url"]
+    diff_result["after_url"] = current["url"]
+
+    # Clear baseline for next use
+    session.pop("_diff_baseline", None)
+    return diff_result
+
+
+def browser_auto_login(
+    session_id: str = "",
+    credentials: dict[str, str] | None = None,
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Auto-detect login form and fill credentials.
+    
+    credentials: {"username": "...", "password": "..."} or {"email": "...", "password": "..."}.
+    Detects login forms by looking for password fields.
+    """
+    if not credentials:
+        return {"ok": False, "error": "credentials dict required: {\"username\": \"...\", \"password\": \"...\"}"}
+
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+
+    # Detect login form
+    form_info = page.evaluate("""() => {
+        const pwdFields = Array.from(document.querySelectorAll('input[type=password]'));
+        if (pwdFields.length === 0) return null;
+        const pwdField = pwdFields[0];
+        const form = pwdField.closest('form') || document.body;
+        const inputs = Array.from(form.querySelectorAll('input:not([type=hidden]):not([type=submit])'));
+        const submitBtn = form.querySelector('button[type=submit], input[type=submit], button') 
+            || document.querySelector('button[type=submit]');
+        return {
+            has_form: true,
+            fields: inputs.map(el => ({
+                type: el.type,
+                name: el.name || '',
+                id: el.id || '',
+                placeholder: el.placeholder || '',
+            })),
+            submit_text: submitBtn?.innerText?.trim() || submitBtn?.value || '',
+        };
+    }""")
+
+    if not form_info:
+        return {"ok": False, "error": "No login form detected (no password field found)"}
+
+    # Fill fields
+    filled = []
+    password = credentials.get("password", "")
+    username = credentials.get("username", credentials.get("email", credentials.get("user", "")))
+
+    # Fill non-password field first (username/email)
+    for field in form_info["fields"]:
+        if field["type"] != "password" and field["type"] in ("text", "email", "tel"):
+            selector = f"input#{field['id']}" if field["id"] else f"input[name='{field['name']}']" if field["name"] else None
+            if selector and username:
+                try:
+                    page.locator(selector).first.fill(username)
+                    filled.append({"field": field["name"] or field["id"], "type": "username"})
+                except Exception:
+                    pass
+                break
+
+    # Fill password
+    try:
+        page.locator("input[type=password]").first.fill(password)
+        filled.append({"field": "password", "type": "password"})
+    except Exception:
+        pass
+
+    # Submit
+    submitted = False
+    try:
+        page.locator("button[type=submit], input[type=submit]").first.click(timeout=3000)
+        submitted = True
+    except Exception:
+        try:
+            page.keyboard.press("Enter")
+            submitted = True
+        except Exception:
+            pass
+
+    return {
+        "ok": len(filled) > 0,
+        "session_id": session_id,
+        "form_detected": True,
+        "fields_count": len(form_info["fields"]),
+        "filled": filled,
+        "submitted": submitted,
+        "submit_button": form_info.get("submit_text", ""),
+    }
+
+
+def browser_cookie_editor(
+    session_id: str = "",
+    action: str = "list",
+    name: str = "",
+    value: str = "",
+    domain: str = "",
+    url: str = "",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """CRUD operations on browser cookies.
+    
+    action: 'list', 'get', 'set', 'delete', 'clear'.
+    """
+    session = get_playwright_session(session_id)
+    context = session.get("context")
+    if not context:
+        return {"ok": False, "error": "No browser context"}
+
+    if action == "list":
+        cookies = context.cookies()
+        return {"ok": True, "cookies": cookies, "count": len(cookies)}
+
+    elif action == "get":
+        cookies = context.cookies()
+        matched = [c for c in cookies if c.get("name") == name]
+        return {"ok": True, "cookies": matched, "count": len(matched)}
+
+    elif action == "set":
+        if not name or not value:
+            return {"ok": False, "error": "name and value required"}
+        cookie = {"name": name, "value": value}
+        if domain:
+            cookie["domain"] = domain
+            cookie["url"] = f"https://{domain}"
+        elif url:
+            cookie["url"] = url
+        else:
+            _, _, page = get_playwright_page(session_id, page_id=page_id)
+            cookie["url"] = page.url
+        context.add_cookies([cookie])
+        return {"ok": True, "set": cookie}
+
+    elif action == "delete":
+        cookies = context.cookies()
+        remaining = [c for c in cookies if c.get("name") != name]
+        context.clear_cookies()
+        if remaining:
+            context.add_cookies(remaining)
+        return {"ok": True, "deleted": name, "remaining": len(remaining)}
+
+    elif action == "clear":
+        context.clear_cookies()
+        return {"ok": True, "cleared": True}
+
+    return {"ok": False, "error": f"Unknown cookie action: {action}"}
+
+
+def browser_pdf_export(
+    session_id: str = "",
+    path: str = "",
+    full_page: bool = True,
+    format_type: str = "pdf",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Export current page as PDF or full-page screenshot.
+    
+    format_type: 'pdf' or 'image'.
+    """
+    import os
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+
+    if not path:
+        ext = "pdf" if format_type == "pdf" else "png"
+        path = os.path.join(os.path.expanduser("~"), "Downloads", f"page_export.{ext}")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    if format_type == "pdf":
+        try:
+            pdf_bytes = page.pdf(path=path, format="A4", print_background=True)
+            return {"ok": True, "path": path, "format": "pdf", "size_bytes": os.path.getsize(path)}
+        except Exception as e:
+            return {"ok": False, "error": f"PDF export failed (requires headless Chromium): {e}"}
+    else:
+        page.screenshot(path=path, full_page=full_page)
+        return {"ok": True, "path": path, "format": "png", "full_page": full_page, "size_bytes": os.path.getsize(path)}
+
+
+def browser_captcha_detect(
+    session_id: str = "",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Detect if a captcha is present on the page."""
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+
+    detection = page.evaluate("""() => {
+        const html = document.documentElement.innerHTML.toLowerCase();
+        const signals = [];
+        
+        // reCAPTCHA
+        if (html.includes('recaptcha') || document.querySelector('.g-recaptcha, #recaptcha'))
+            signals.push('recaptcha');
+        // hCaptcha
+        if (html.includes('hcaptcha') || document.querySelector('.h-captcha'))
+            signals.push('hcaptcha');
+        // Cloudflare Turnstile
+        if (html.includes('turnstile') || html.includes('cf-challenge') || document.querySelector('.cf-turnstile'))
+            signals.push('cloudflare_turnstile');
+        // Cloudflare challenge page
+        if (html.includes('checking your browser') || html.includes('just a moment'))
+            signals.push('cloudflare_challenge');
+        // Generic captcha
+        if (document.querySelector('img[src*=captcha], iframe[src*=captcha]'))
+            signals.push('generic_captcha');
+        // FunCaptcha / Arkose
+        if (html.includes('funcaptcha') || html.includes('arkoselabs'))
+            signals.push('funcaptcha');
+            
+        return {
+            detected: signals.length > 0,
+            types: signals,
+            url: window.location.href,
+        };
+    }""")
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "captcha_detected": detection["detected"],
+        "captcha_types": detection["types"],
+        "url": detection["url"],
+        "hint": "Captcha detected! Manual intervention or captcha service may be required." if detection["detected"] else "No captcha detected.",
+    }
+
+
+def browser_perf_profile(
+    session_id: str = "",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Measure page performance: load time, resources, memory."""
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+
+    perf = page.evaluate("""() => {
+        const timing = performance.timing || {};
+        const nav = performance.getEntriesByType('navigation')[0] || {};
+        const resources = performance.getEntriesByType('resource');
+        
+        return {
+            load_time_ms: timing.loadEventEnd ? timing.loadEventEnd - timing.navigationStart : null,
+            dom_ready_ms: timing.domContentLoadedEventEnd ? timing.domContentLoadedEventEnd - timing.navigationStart : null,
+            first_paint_ms: (() => { const fp = performance.getEntriesByName('first-paint')[0]; return fp ? Math.round(fp.startTime) : null; })(),
+            first_contentful_paint_ms: (() => { const fcp = performance.getEntriesByName('first-contentful-paint')[0]; return fcp ? Math.round(fcp.startTime) : null; })(),
+            resource_count: resources.length,
+            total_transfer_kb: Math.round(resources.reduce((s, r) => s + (r.transferSize || 0), 0) / 1024),
+            largest_resources: resources
+                .sort((a, b) => (b.transferSize || 0) - (a.transferSize || 0))
+                .slice(0, 5)
+                .map(r => ({name: r.name.split('/').pop()?.slice(0, 60), type: r.initiatorType, size_kb: Math.round((r.transferSize || 0) / 1024)})),
+            dom_elements: document.querySelectorAll('*').length,
+            url: window.location.href,
+        };
+    }""")
+
+    return {"ok": True, "session_id": session_id, **perf}
+
+
+# ═══ END PHASE 10-21 ══════════════════════════════════════════════
+
+
 def browser_intent_click(
     session_id: str,
     intent: str,

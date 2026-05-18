@@ -305,13 +305,13 @@ R["browser_session"] = (
 
 R["browser_navigate"] = (
     "Navigate browser pages.\n"
-    "Actions: goto, reload, back, forward, scroll, scroll_extract, new_page, switch_page, close_page, list_pages, tab_summary", {
+    "Actions: goto, reload, back, forward, scroll, scroll_extract, new_page, switch_page, close_page, list_pages, tab_summary, smart_wait", {
     "goto": _bs.browser_navigate, "reload": _bs.browser_reload,
     "back": _bs.browser_go_back, "forward": _bs.browser_go_forward,
     "scroll": _bs.browser_scroll_page, "scroll_extract": _bs.browser_scroll_extract,
     "new_page": _bs.browser_new_page, "switch_page": _bs.browser_switch_page,
     "close_page": _bs.browser_close_page, "list_pages": _bs.browser_list_pages,
-    "tab_summary": _bs.browser_tab_summary,
+    "tab_summary": _bs.browser_tab_summary, "smart_wait": _bs.browser_smart_wait,
 })
 
 R["browser_content"] = (
@@ -347,12 +347,14 @@ R["browser_interact"] = (
     "toggle": _bs.browser_toggle_form_field, "upload": _bs.browser_set_input_files,
     "click_intent": _bs.browser_intent_click, "suggest_actions": _bs.browser_suggest_actions,
     "human_idle": _bs.browser_human_idle, "smart_fill": _bs.browser_smart_fill,
+    "auto_login": _bs.browser_auto_login,
 })
 
 R["browser_observe"] = (
     "Capture screenshots and wait for conditions.\n"
     "Actions: capture, capture_element, capture_session, capture_live, save, save_live, observe_rich, "
-    "wait_selector, wait_text, wait_load, wait_dom, wait_url, wait_visual, wait_download", {
+    "wait_selector, wait_text, wait_load, wait_dom, wait_url, wait_visual, wait_download, "
+    "page_diff, captcha_detect, perf_profile, pdf_export", {
     "capture": _bh.browser_capture_page, "capture_element": _bs.browser_capture_element,
     "capture_session": _bs.browser_capture_session, "capture_live": _bs.browser_capture_live_page,
     "save": _bh.browser_save_screenshot, "save_live": _bs.browser_save_live_page_screenshot,
@@ -361,6 +363,19 @@ R["browser_observe"] = (
     "wait_url": _bs.browser_wait_for_url, "wait_visual": _bs.browser_wait_for_visual_change,
     "wait_download": _bs.browser_wait_for_download,
     "observe_rich": _bs.browser_observe,
+    "page_diff": _bs.browser_page_diff, "captcha_detect": _bs.browser_captcha_detect,
+    "perf_profile": _bs.browser_perf_profile, "pdf_export": _bs.browser_pdf_export,
+})
+
+R["browser_session_state"] = (
+    "Save/restore browser session state and cookie management.\n"
+    "Actions: save, restore, cookie_list, cookie_get, cookie_set, cookie_delete, cookie_clear", {
+    "save": _bs.browser_save_session, "restore": _bs.browser_restore_session,
+    "cookie_list": lambda **kw: _bs.browser_cookie_editor(action="list", **kw),
+    "cookie_get": lambda **kw: _bs.browser_cookie_editor(action="get", **kw),
+    "cookie_set": lambda **kw: _bs.browser_cookie_editor(action="set", **kw),
+    "cookie_delete": lambda **kw: _bs.browser_cookie_editor(action="delete", **kw),
+    "cookie_clear": lambda **kw: _bs.browser_cookie_editor(action="clear", **kw),
 })
 
 R["browser_network"] = (
@@ -375,6 +390,7 @@ R["browser_network"] = (
     "net_har": _bs.browser_export_network_har,
     "intercept_set": _bs.browser_intercept_requests, "intercept_list": _bs.browser_list_intercepts,
     "intercept_clear": _bs.browser_clear_intercepts,
+    "intercept_smart": lambda sub_action="list_rules", **kw: _bs.browser_network_intercept(action=sub_action, **kw),
     "console_logs": _bs.browser_get_console_logs, "dialogs": _bs.browser_get_dialogs,
     "cookie_get": _bs.browser_get_cookies, "cookie_set": _bs.browser_set_cookies,
     "cookie_delete": _bs.browser_delete_cookies, "storage_export": _bs.browser_storage_state_export,
@@ -559,18 +575,25 @@ R["system_ops"] = (
 
 # ═══ RUNTIME (1) ════════════════════════════════════════════════════
 
-from .router import clipboard_bridge as _clipboard_bridge, replay_last as _replay_last
+from .router import (
+    clipboard_bridge as _clipboard_bridge, replay_last as _replay_last,
+    proxy_manager as _proxy_manager, multi_browser_run as _multi_browser_run,
+    action_recorder as _action_recorder,
+)
 
 R["runtime"] = (
     "MCP runtime status, analysis, and health.\n"
     "Actions: status, events, clear, health, manifest, evals, analysis_export, analysis_latest, ping, "
-    "clipboard_bridge, replay_last", {
+    "clipboard_bridge, replay_last, proxy_manager, multi_browser, recorder", {
     "status": _trt.runtime_get_status, "events": _trt.runtime_get_recent_events,
     "clear": _trt.runtime_clear_events, "health": _trt.runtime_healthcheck,
     "manifest": _trt.runtime_tool_manifest, "evals": _trt.runtime_evals,
     "analysis_export": _cap.export_analysis_history, "analysis_latest": _cap.get_latest_analysis,
     "ping": _rt.ping,
     "clipboard_bridge": _clipboard_bridge, "replay_last": _replay_last,
+    "proxy_manager": lambda sub_action="list", **kw: _proxy_manager(action=sub_action, **kw),
+    "multi_browser": _multi_browser_run,
+    "recorder": lambda sub_action="status", **kw: _action_recorder(action=sub_action, **kw),
 })
 
 from . import workflow_templates as _wt
