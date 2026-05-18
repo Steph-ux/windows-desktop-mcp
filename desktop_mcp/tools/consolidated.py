@@ -73,6 +73,74 @@ def _build_help(actions: dict[str, Any], tool_name: str, filter_action: str = ""
     return {"ok": True, "tool": tool_name, "actions": result, "count": len(result)}
 
 
+# Common natural-language aliases → canonical action names
+_ACTION_ALIASES: dict[str, dict[str, str]] = {
+    "browser_navigate": {
+        "scroll down": "scroll", "scroll up": "scroll", "scroll": "scroll",
+        "scroll_down": "scroll", "scroll_up": "scroll",
+        "go back": "back", "go forward": "forward",
+        "navigate": "goto", "open": "goto", "open_url": "goto", "go": "goto",
+        "new tab": "new_page", "open tab": "new_page", "new_tab": "new_page",
+        "close tab": "close_page", "close_tab": "close_page",
+        "switch tab": "switch_page", "switch_tab": "switch_page",
+        "refresh": "reload",
+    },
+    "browser_interact": {
+        "scroll": "scroll", "scroll down": "scroll", "scroll up": "scroll",
+        "type text": "type", "write": "type", "input": "type",
+        "click button": "click", "press button": "click",
+        "fill": "fill_field", "fill_form": "fill_form",
+    },
+    "desktop_interact": {
+        "scroll": "mouse_scroll", "scroll down": "mouse_scroll", "scroll up": "mouse_scroll",
+        "type": "kb_type", "type text": "kb_type", "write": "kb_type",
+        "press": "kb_press", "press key": "kb_press",
+        "hotkey": "kb_hotkey", "shortcut": "kb_hotkey",
+        "copy": "clip_get", "paste": "clip_set",
+        "move mouse": "mouse_move", "drag": "mouse_drag",
+    },
+}
+
+
+def _resolve_action(actions: dict, action: str, tool_name: str) -> str | None:
+    """Try to resolve an action name using aliases and fuzzy matching."""
+    # 1. Exact match
+    if action in actions:
+        return action
+
+    normalized = action.strip().lower().replace("-", "_")
+
+    # 2. Case-insensitive match
+    for key in actions:
+        if key.lower() == normalized:
+            return key
+
+    # 3. Known aliases
+    aliases = _ACTION_ALIASES.get(tool_name, {})
+    if normalized in aliases:
+        return aliases[normalized]
+
+    # 4. Substring match (action name is contained in input or vice versa)
+    for key in actions:
+        if key in normalized or normalized in key:
+            return key
+
+    # 5. Word overlap scoring
+    input_words = set(normalized.replace("_", " ").split())
+    best_match = None
+    best_score = 0
+    for key in actions:
+        key_words = set(key.replace("_", " ").split())
+        overlap = len(input_words & key_words)
+        if overlap > best_score:
+            best_score = overlap
+            best_match = key
+    if best_score > 0:
+        return best_match
+
+    return None
+
+
 def _d(actions, action, tool_name="", timeout_ms=None, **kw):
     """Dispatch to an action with structured error handling and optional timeout."""
     # Built-in help action — returns schema for all actions
@@ -82,8 +150,14 @@ def _d(actions, action, tool_name="", timeout_ms=None, **kw):
 
     fn = actions.get(action)
     if not fn:
-        return {"ok": False, "error": f"Unknown action: {action!r}",
-                "available_actions": sorted(actions.keys())}
+        # Try fuzzy resolution before failing
+        resolved = _resolve_action(actions, action, tool_name)
+        if resolved:
+            fn = actions[resolved]
+            action = resolved  # use canonical name from here
+        else:
+            return {"ok": False, "error": f"Unknown action: {action!r}",
+                    "available_actions": sorted(actions.keys())}
 
     confirmed = bool(kw.pop("_mcp_confirmed", False) or kw.get("confirmed", False))
     confirmation_source = str(kw.pop("_mcp_confirmation_source", "") or kw.get("confirmation_source", ""))
