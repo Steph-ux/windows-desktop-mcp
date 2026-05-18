@@ -141,12 +141,70 @@ def _resolve_action(actions: dict, action: str, tool_name: str) -> str | None:
     return None
 
 
-def _d(actions, action, tool_name="", timeout_ms=None, **kw):
+def _error_recovery(error_msg: str, action: str, tool_name: str, actions: dict) -> dict[str, str]:
+    """Generate suggested_fix, example, and hint for common errors."""
+    msg = error_msg.lower()
+    hints: dict[str, str] = {}
+
+    if "session" in msg and ("unknown" in msg or "no active" in msg or "expired" in msg):
+        hints["suggested_fix"] = "browser_session(action='open', kwargs='{\"url\": \"https://example.com\"}')"
+        hints["hint"] = "No active browser session. Open one first, then retry."
+        hints["example"] = f'{tool_name}(action="{action}", kwargs=\'{{"session_id": "auto"}}\')'
+    elif "element" in msg or "not found" in msg or "no ui element" in msg or "no ocr text" in msg:
+        hints["suggested_fix"] = f"{tool_name}(action='help', kwargs='{{\"action_name\": \"{action}\"}}')"
+        hints["hint"] = "Element not found. Use suggest_actions or observe_rich to see what's available."
+        if "browser" in tool_name:
+            hints["example"] = "browser_observe(action='observe_rich')"
+        else:
+            hints["example"] = "desktop_interact(action='suggest_actions')"
+    elif "timeout" in msg or "timed out" in msg:
+        hints["hint"] = "Action timed out. Increase timeout_ms or verify the page/window is ready."
+        hints["suggested_fix"] = f'{tool_name}(action="{action}", kwargs=\'{{"timeout_ms": 15000}}\')'
+    elif "invalid" in msg or "type" in msg and "error" in msg:
+        schema = _action_schema(actions.get(action, lambda: None))
+        hints["hint"] = f"Invalid parameters. Expected: {list(schema.keys())}"
+        hints["expected_params"] = schema
+    else:
+        hints["hint"] = f"Action failed. Use {tool_name}(action='help', kwargs='{{\"action_name\": \"{action}\"}}') to see parameters."
+
+    return hints
+
+
+def _d(dispatch_map, action, tool_name="", timeout_ms=None, **kw):
     """Dispatch to an action with structured error handling and optional timeout."""
+    from ..state import CONTEXT_MEMORY
+    actions = dispatch_map
+
     # Built-in help action — returns schema for all actions
     if action == "help":
         filter_action = kw.get("action_name", "") or kw.get("name", "")
         return _build_help(actions, tool_name, filter_action)
+
+    # Built-in batch action — execute multiple actions sequentially
+    if action == "batch":
+        batch_steps = kw.get("actions", kw.get("steps", []))
+        if not batch_steps or not isinstance(batch_steps, list):
+            return {"ok": False, "error": "batch requires 'actions' list", 
+                    "example": '{"actions": [{"action": "goto", "url": "..."}, {"action": "scroll"}]}'}
+        stop_on_error = kw.get("stop_on_error", True)
+        results = []
+        for i, step in enumerate(batch_steps):
+            if not isinstance(step, dict) or "action" not in step:
+                results.append({"ok": False, "error": f"Step {i}: missing 'action' key"})
+                if stop_on_error:
+                    break
+                continue
+            step_kw = {k: v for k, v in step.items() if k != "action"}
+            step_action = step["action"]
+            step_result = _d(actions, step_action, tool_name=tool_name, timeout_ms=timeout_ms, **step_kw)
+            results.append({"step": i, "action": step_action, **step_result})
+            if not step_result.get("ok", False) and stop_on_error:
+                break
+        return {"ok": all(r.get("ok", False) for r in results), "results": results, "steps": len(results)}
+
+    # Built-in context action — return current state
+    if action == "context":
+        return {"ok": True, **CONTEXT_MEMORY}
 
     fn = actions.get(action)
     if not fn:
@@ -157,7 +215,8 @@ def _d(actions, action, tool_name="", timeout_ms=None, **kw):
             action = resolved  # use canonical name from here
         else:
             return {"ok": False, "error": f"Unknown action: {action!r}",
-                    "available_actions": sorted(actions.keys())}
+                    "available_actions": sorted(actions.keys()),
+                    "hint": f"Use {tool_name}(action='help') to see all actions."}
 
     confirmed = bool(kw.pop("_mcp_confirmed", False) or kw.get("confirmed", False))
     confirmation_source = str(kw.pop("_mcp_confirmation_source", "") or kw.get("confirmation_source", ""))
@@ -187,18 +246,33 @@ def _d(actions, action, tool_name="", timeout_ms=None, **kw):
     try:
         result = fn(**kw)
         elapsed = round(time.monotonic() - t0, 3)
+        # Update context memory
+        CONTEXT_MEMORY["last_action"] = action
+        CONTEXT_MEMORY["last_tool"] = tool_name
+        CONTEXT_MEMORY["last_error"] = ""
+        CONTEXT_MEMORY["action_count"] += 1
         # If result is already a dict with ok/error, return as-is
         if isinstance(result, dict):
+            result.setdefault("ok", True)
             result.setdefault("_elapsed_ms", int(elapsed * 1000))
+            if result.get("url"):
+                CONTEXT_MEMORY["last_url"] = result["url"]
             return result
         return {"ok": True, "result": result, "_elapsed_ms": int(elapsed * 1000)}
     except TimeoutError:
-        return {"ok": False, "error": "Action timed out",
+        err = {"ok": False, "error": "Action timed out",
                 "action": action, "timeout_ms": timeout_ms or DEFAULT_TIMEOUT_MS}
+        err.update(_error_recovery("timed out", action, tool_name, actions))
+        CONTEXT_MEMORY["last_error"] = "timeout"
+        return err
     except Exception as e:
-        return {"ok": False, "error": str(e), "action": action,
+        error_msg = str(e)
+        err = {"ok": False, "error": error_msg, "action": action,
                 "type": type(e).__name__,
                 "trace": traceback.format_exc(limit=3)}
+        err.update(_error_recovery(error_msg, action, tool_name, actions))
+        CONTEXT_MEMORY["last_error"] = error_msg[:200]
+        return err
 
 
 R: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -231,12 +305,13 @@ R["browser_session"] = (
 
 R["browser_navigate"] = (
     "Navigate browser pages.\n"
-    "Actions: goto, reload, back, forward, scroll, new_page, switch_page, close_page, list_pages", {
+    "Actions: goto, reload, back, forward, scroll, scroll_extract, new_page, switch_page, close_page, list_pages, tab_summary", {
     "goto": _bs.browser_navigate, "reload": _bs.browser_reload,
     "back": _bs.browser_go_back, "forward": _bs.browser_go_forward,
-    "scroll": _bs.browser_scroll_page,
+    "scroll": _bs.browser_scroll_page, "scroll_extract": _bs.browser_scroll_extract,
     "new_page": _bs.browser_new_page, "switch_page": _bs.browser_switch_page,
     "close_page": _bs.browser_close_page, "list_pages": _bs.browser_list_pages,
+    "tab_summary": _bs.browser_tab_summary,
 })
 
 R["browser_content"] = (
@@ -271,7 +346,7 @@ R["browser_interact"] = (
     "fill_field": _bs.browser_fill_form_field, "fill_form": _bs.browser_fill_form,
     "toggle": _bs.browser_toggle_form_field, "upload": _bs.browser_set_input_files,
     "click_intent": _bs.browser_intent_click, "suggest_actions": _bs.browser_suggest_actions,
-    "human_idle": _bs.browser_human_idle,
+    "human_idle": _bs.browser_human_idle, "smart_fill": _bs.browser_smart_fill,
 })
 
 R["browser_observe"] = (
@@ -420,6 +495,8 @@ R["desktop_observe"] = (
     # Multi-monitor (NEW)
     "list_monitors": _mon.list_monitors, "capture_monitor": _mon.capture_monitor,
     "capture_all_monitors": _mon.capture_all_monitors, "monitor_at_point": _mon.get_monitor_at_point,
+    # Screenshot + actions
+    "screenshot_actions": _ai.desktop_screenshot_actions,
 })
 
 R["desktop_monitor"] = (
@@ -482,14 +559,18 @@ R["system_ops"] = (
 
 # ═══ RUNTIME (1) ════════════════════════════════════════════════════
 
+from .router import clipboard_bridge as _clipboard_bridge, replay_last as _replay_last
+
 R["runtime"] = (
     "MCP runtime status, analysis, and health.\n"
-    "Actions: status, events, clear, health, manifest, evals, analysis_export, analysis_latest, ping", {
+    "Actions: status, events, clear, health, manifest, evals, analysis_export, analysis_latest, ping, "
+    "clipboard_bridge, replay_last", {
     "status": _trt.runtime_get_status, "events": _trt.runtime_get_recent_events,
     "clear": _trt.runtime_clear_events, "health": _trt.runtime_healthcheck,
     "manifest": _trt.runtime_tool_manifest, "evals": _trt.runtime_evals,
     "analysis_export": _cap.export_analysis_history, "analysis_latest": _cap.get_latest_analysis,
     "ping": _rt.ping,
+    "clipboard_bridge": _clipboard_bridge, "replay_last": _replay_last,
 })
 
 from . import workflow_templates as _wt
@@ -564,3 +645,40 @@ for _name, (_doc, _actions) in R.items():
         tool_fn.__doc__ = doc
         return tool_fn
     mcp.tool()(_make())
+
+# ═══ GLOBAL ROUTER 'do' — single entry point for simple models ════
+from .router import route_instruction as _route
+
+async def _do_tool(instruction: str = "", kwargs: str = "{}") -> dict[str, Any]:
+    """Smart router: describe what you want in natural language.
+    Examples: 'scroll down', 'click Save', 'go to https://google.com', 'type \"hello\"', 'take screenshot'.
+    Routes automatically to the correct tool and action."""
+    try:
+        extra_kw = _json.loads(kwargs) if isinstance(kwargs, str) and kwargs.strip() else {}
+    except _json.JSONDecodeError:
+        extra_kw = {}
+
+    try:
+        tool_name, action, auto_kwargs = _route(instruction)
+    except ValueError as e:
+        return {"ok": False, "error": str(e),
+                "hint": "Describe what you want: 'scroll down', 'click OK', 'go to url', 'type text'"}
+
+    # Merge: explicit kwargs override auto-extracted ones
+    merged = {**auto_kwargs, **extra_kw}
+    tool_entry = R.get(tool_name)
+    if not tool_entry:
+        return {"ok": False, "error": f"Internal routing error: tool {tool_name!r} not found"}
+
+    _, actions = tool_entry
+    result = await anyio.to_thread.run_sync(
+        functools.partial(_d, actions, action, tool_name=tool_name, **merged)
+    )
+    if isinstance(result, dict):
+        result["_routed_to"] = tool_name
+        result["_routed_action"] = action
+    return result
+
+_do_tool.__name__ = "do"
+_do_tool.__qualname__ = "do"
+mcp.tool()(_do_tool)

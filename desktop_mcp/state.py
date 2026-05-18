@@ -22,3 +22,12 @@ OBSERVED_PLAYWRIGHT_PAGES: weakref.WeakSet[Any] = weakref.WeakSet()
 ACTION_EVENT_LOG: deque[dict[str, Any]] = deque(maxlen=250)
 DESKTOP_WATCH_SESSIONS: dict[str, dict[str, Any]] = {}
 DESKTOP_WATCH_LOCK = threading.Lock()
+DEFAULT_BROWSER_SESSION_ID: str = ""
+CONTEXT_MEMORY: dict[str, Any] = {
+    "last_session_id": "",
+    "last_action": "",
+    "last_tool": "",
+    "last_url": "",
+    "last_error": "",
+    "action_count": 0,
+}

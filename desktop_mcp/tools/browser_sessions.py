@@ -1702,6 +1702,77 @@ def browser_scroll_page(session_id: str, delta_y: int = 800, page_id: str | None
     result = {"session_id": session_id, "page_id": resolved_page_id, "before": before, "after": after, "delta_y": delta_y}
     record_event("browser_scroll_page", **result)
     return result
+
+
+def browser_scroll_extract(
+    session_id: str = "",
+    max_scrolls: int = 5,
+    extract_mode: str = "text",
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Scroll the page incrementally and extract content at each step.
+    
+    extract_mode: 'text' (body text), 'links' (all links), 'all' (text + links + headings).
+    Returns full page content up to ~8000 chars.
+    """
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    
+    content_parts: list[str] = []
+    links: list[dict[str, str]] = []
+    
+    for i in range(max_scrolls + 1):
+        if extract_mode in ("text", "all"):
+            text = page.evaluate("""() => {
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                const visible = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, li, td, span, a, label, button'))
+                    .filter(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.top < window.innerHeight; })
+                    .map(el => el.innerText.trim())
+                    .filter(t => t.length > 0);
+                return [...new Set(visible)].join('\\n');
+            }""")
+            if text:
+                content_parts.append(text)
+        
+        if extract_mode in ("links", "all"):
+            page_links = page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('a[href]'))
+                    .filter(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.top < window.innerHeight; })
+                    .map(a => ({text: a.innerText.trim(), href: a.href}))
+                    .filter(l => l.text.length > 0);
+            }""")
+            links.extend(page_links)
+        
+        if i < max_scrolls:
+            old_y = page.evaluate("() => window.scrollY")
+            page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.8)")
+            import time as _time
+            _time.sleep(0.3)
+            new_y = page.evaluate("() => window.scrollY")
+            if new_y == old_y:
+                break
+    
+    full_text = "\n".join(dict.fromkeys(content_parts))[:8000]
+    unique_links = {l["href"]: l for l in links}
+    
+    result: dict[str, Any] = {
+        "ok": True,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "scrolls_done": i + 1 if 'i' in dir() else 1,
+        "url": page.url,
+    }
+    if extract_mode in ("text", "all"):
+        result["text"] = full_text
+        result["text_length"] = len(full_text)
+    if extract_mode in ("links", "all"):
+        result["links"] = list(unique_links.values())[:100]
+        result["link_count"] = len(unique_links)
+    
+    record_event("browser_scroll_extract", session_id=session_id, scrolls=result.get("scrolls_done"))
+    return result
+
+
 def browser_eval(session_id: str, expression: str, page_id: str | None = None) -> dict[str, Any]:
     validate_js_expression(expression)
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
@@ -1856,6 +1927,138 @@ def browser_fill_form(session_id: str, fields: list[dict[str, Any]], submit_sele
     result = {"session_id": session_id, "page_id": resolved_page_id, "filled": filled, "submitted": submit_selector is not None}
     record_event("browser_fill_form", session_id=session_id, page_id=resolved_page_id, field_count=len(filled), submitted=submit_selector is not None)
     return result
+def browser_smart_fill(
+    session_id: str = "",
+    fields: dict[str, str] | None = None,
+    submit: bool = False,
+    page_id: str | None = None,
+) -> dict[str, Any]:
+    """Detect form fields and fill them by matching label/placeholder/name/id.
+    
+    fields: dict mapping human-readable name to value, e.g. {"email": "user@x.com", "password": "***"}.
+    The function fuzzy-matches keys against field labels, placeholders, names, and aria-labels.
+    """
+    if not fields:
+        return {"ok": False, "error": "fields dict required, e.g. {\"email\": \"...\", \"password\": \"...\"}"}
+    
+    _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
+    
+    # Get all form fields with their attributes
+    form_fields = page.evaluate("""() => {
+        const inputs = Array.from(document.querySelectorAll('input, textarea, select'));
+        return inputs.map((el, idx) => {
+            const label = el.labels?.[0]?.innerText?.trim() || '';
+            return {
+                idx,
+                tag: el.tagName.toLowerCase(),
+                type: el.type || 'text',
+                name: el.name || '',
+                id: el.id || '',
+                placeholder: el.placeholder || '',
+                ariaLabel: el.getAttribute('aria-label') || '',
+                label,
+                visible: el.offsetParent !== null,
+            };
+        }).filter(f => f.visible && f.type !== 'hidden');
+    }""")
+    
+    filled = []
+    not_found = []
+    
+    for key, value in fields.items():
+        key_lower = key.lower().strip()
+        best_field = None
+        best_score = 0
+        
+        for f in form_fields:
+            score = 0
+            searchable = f"{f['name']} {f['id']} {f['placeholder']} {f['ariaLabel']} {f['label']}".lower()
+            if key_lower == f['name'].lower() or key_lower == f['id'].lower():
+                score = 100
+            elif key_lower in searchable:
+                score = 50
+            elif any(w in searchable for w in key_lower.split()):
+                score = 25
+            
+            if score > best_score:
+                best_score = score
+                best_field = f
+        
+        if best_field:
+            idx = best_field['idx']
+            if best_field['tag'] == 'select':
+                page.evaluate(f"""(v) => {{
+                    const el = document.querySelectorAll('input, textarea, select')[{idx}];
+                    el.value = v;
+                    el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                }}""", value)
+            else:
+                page.evaluate(f"""() => {{
+                    const el = document.querySelectorAll('input, textarea, select')[{idx}];
+                    el.focus();
+                    el.value = '';
+                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                }}""")
+                locator = page.locator(f"input, textarea, select").nth(idx)
+                locator.fill(str(value))
+            filled.append({"key": key, "matched": f"{best_field['tag']}[name={best_field['name']}]", "score": best_score})
+            # Mark as used
+            form_fields = [f for f in form_fields if f['idx'] != idx]
+        else:
+            not_found.append(key)
+    
+    submitted = False
+    if submit and filled:
+        try:
+            btn = page.locator("button[type=submit], input[type=submit], button:has-text('Submit'), button:has-text('Log'), button:has-text('Sign')").first
+            btn.click(timeout=3000)
+            submitted = True
+        except Exception:
+            pass
+    
+    result = {
+        "ok": len(filled) > 0,
+        "session_id": session_id,
+        "page_id": resolved_page_id,
+        "filled": filled,
+        "not_found": not_found,
+        "submitted": submitted,
+    }
+    record_event("browser_smart_fill", session_id=session_id, filled_count=len(filled))
+    return result
+
+
+def browser_tab_summary(session_id: str = "") -> dict[str, Any]:
+    """Return a summary of all open tabs/pages in the session."""
+    from ..browser_sessions import get_playwright_session, list_playwright_sessions
+    
+    if not session_id:
+        sessions = list_playwright_sessions()
+        if not sessions:
+            return {"ok": False, "error": "No active sessions"}
+        session_id = sessions[0][0]
+    
+    session = get_playwright_session(session_id)
+    context = session.get("context")
+    if not context:
+        return {"ok": False, "error": "Session has no browser context"}
+    
+    pages = context.pages
+    tabs = []
+    for i, page in enumerate(pages):
+        try:
+            tabs.append({
+                "index": i,
+                "url": page.url,
+                "title": page.title() if page.url != "about:blank" else "(blank)",
+                "active": page == session.get("page"),
+            })
+        except Exception:
+            tabs.append({"index": i, "url": "?", "title": "?", "active": False})
+    
+    return {"ok": True, "session_id": session_id, "tabs": tabs, "count": len(tabs)}
+
+
 def browser_wait_for_load_state(session_id: str, state: str = "networkidle", timeout_ms: int = 10000, page_id: str | None = None) -> dict[str, Any]:
     _, resolved_page_id, page = get_playwright_page(session_id, page_id=page_id)
     page.wait_for_load_state(state=state, timeout=max(timeout_ms, 1))

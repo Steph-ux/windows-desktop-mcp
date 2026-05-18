@@ -7,13 +7,16 @@ from collections import deque
 from typing import Any
 
 from .helpers import wait_until
-from .state import OBSERVED_PLAYWRIGHT_PAGES, PLAYWRIGHT_SESSIONS, PLAYWRIGHT_SESSIONS_LOCK, SESSION_MAX_AGE_MINUTES
+from .state import DEFAULT_BROWSER_SESSION_ID, OBSERVED_PLAYWRIGHT_PAGES, PLAYWRIGHT_SESSIONS, PLAYWRIGHT_SESSIONS_LOCK, SESSION_MAX_AGE_MINUTES
+import desktop_mcp.state as _state
 
 
 def store_playwright_session(session: dict[str, Any]) -> None:
     session_id = str(session["session_id"])
     with PLAYWRIGHT_SESSIONS_LOCK:
         PLAYWRIGHT_SESSIONS[session_id] = session
+    _state.DEFAULT_BROWSER_SESSION_ID = session_id
+    _state.CONTEXT_MEMORY["last_session_id"] = session_id
 
 
 def list_playwright_sessions() -> list[tuple[str, dict[str, Any]]]:
@@ -82,7 +85,24 @@ def close_all_playwright_sessions() -> dict[str, Any]:
     }
 
 
+def resolve_session_id(session_id: str | None) -> str:
+    """Resolve session_id: if empty/None, use default; if still empty, use last active."""
+    if session_id:
+        return session_id
+    # Try global default
+    if _state.DEFAULT_BROWSER_SESSION_ID:
+        if _state.DEFAULT_BROWSER_SESSION_ID in PLAYWRIGHT_SESSIONS:
+            return _state.DEFAULT_BROWSER_SESSION_ID
+    # Fallback: most recently used session
+    with PLAYWRIGHT_SESSIONS_LOCK:
+        if PLAYWRIGHT_SESSIONS:
+            best = max(PLAYWRIGHT_SESSIONS.items(), key=lambda x: x[1].get("last_used_at", 0))
+            return best[0]
+    raise ValueError("No active browser session. Call browser_session(action='open', kwargs='{\"url\": \"...\"}') first.")
+
+
 def get_playwright_session(session_id: str) -> dict[str, Any]:
+    session_id = resolve_session_id(session_id)
     cleanup_stale_playwright_sessions()
     with PLAYWRIGHT_SESSIONS_LOCK:
         session = PLAYWRIGHT_SESSIONS.get(session_id)
@@ -92,6 +112,8 @@ def get_playwright_session(session_id: str) -> dict[str, Any]:
                 "The session may have expired, been cleaned up, or never existed."
             )
         session["last_used_at"] = time.time()
+        _state.DEFAULT_BROWSER_SESSION_ID = session_id
+        _state.CONTEXT_MEMORY["last_session_id"] = session_id
         return session
 
 

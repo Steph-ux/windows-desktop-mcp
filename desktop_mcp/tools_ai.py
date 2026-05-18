@@ -754,3 +754,78 @@ def desktop_human_idle(
     }
     record_event("desktop_human_idle", idle_ms=safe_duration, steps=steps)
     return result
+
+
+def desktop_screenshot_actions(
+    title_regex: str | None = None,
+    handle: int | None = None,
+    max_items: int = 20,
+) -> dict:
+    """Capture screenshot + annotate interactive elements + suggest actions in one call.
+    
+    Returns screenshot path, list of interactive elements with positions, and suggested actions.
+    """
+    import base64
+    from .desktop_core import find_matching_elements, get_foreground_window_info
+    from .tools.capture import capture_desktop_screenshot
+
+    # Get target window
+    if title_regex:
+        import re
+        from .desktop_core import list_windows
+        for w in list_windows():
+            if re.search(title_regex, w.get("title", ""), re.IGNORECASE):
+                handle = w.get("handle")
+                break
+
+    w_info = get_foreground_window_info() if not handle else {"handle": handle}
+
+    # Capture screenshot
+    screenshot_result = capture_desktop_screenshot()
+    screenshot_path = screenshot_result.get("path", "")
+
+    # Get UIA elements
+    interactive_types = [
+        "Button", "Edit", "ComboBox", "CheckBox", "RadioButton",
+        "Hyperlink", "MenuItem", "Tab", "ListItem", "Slider",
+    ]
+    elements = []
+    for ct in interactive_types:
+        found = find_matching_elements(
+            control_type=ct,
+            title_regex=title_regex,
+            handle=handle,
+            max_results=5,
+        )
+        for el in found:
+            elements.append({
+                "type": ct,
+                "name": el.get("name", ""),
+                "automation_id": el.get("automation_id", ""),
+                "rect": el.get("rect"),
+                "enabled": el.get("is_enabled", True),
+            })
+        if len(elements) >= max_items:
+            break
+
+    elements = elements[:max_items]
+
+    # Generate suggested actions
+    suggestions = []
+    for el in elements:
+        if el["enabled"] and el["name"]:
+            if el["type"] in ("Button", "Hyperlink", "MenuItem", "Tab", "ListItem"):
+                suggestions.append(f"click_intent(intent='{el['name']}')")
+            elif el["type"] in ("Edit", "ComboBox"):
+                suggestions.append(f"click_intent(intent='{el['name']}') then kb_type(text='...')")
+            elif el["type"] in ("CheckBox", "RadioButton"):
+                suggestions.append(f"click_intent(intent='{el['name']}') to toggle")
+
+    return {
+        "ok": True,
+        "screenshot": screenshot_path,
+        "elements": elements,
+        "element_count": len(elements),
+        "suggestions": suggestions[:15],
+        "window": w_info,
+    }
