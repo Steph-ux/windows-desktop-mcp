@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "windows-desktop-mcp"
-version = "0.2.0"
-description = "Windows desktop and browser control MCP server - 19 super-tools for automation, OCR, Playwright, video recording, social DOM extraction, workflows, and persistent goals."
+version = "0.3.0"
+description = "Windows desktop and browser control MCP server — 21 tools, 319 actions for automation, OCR, Playwright, AI intelligence, stealth browser, video recording, social DOM extraction, workflows, and persistent goals."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Steph-ux"},
 ]
-keywords = ["mcp", "desktop", "automation", "playwright", "ocr", "windows", "browser", "workflow", "goals"]
+keywords = ["mcp", "desktop", "automation", "playwright", "ocr", "windows", "browser", "workflow", "goals", "ai", "stealth", "scraping"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -45,6 +45,7 @@ dependencies = [
     "anyio>=4.0.0",
     "websocket-client>=1.8.0",
     "cloakbrowser>=0.3.28",
+    "pyperclip>=1.9.0",
 ]
 
 [project.optional-dependencies]
